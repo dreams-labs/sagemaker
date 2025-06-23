@@ -12,3 +12,6 @@ s3_wallet_loading_queue/*
 s3_coin_loading_queue/*
 .DS_Store
 src/etls/__pycache__/s3_pipeline.cpython-311.pyc
+
+# archives
+notebooks/archived/*
