@@ -75,11 +75,14 @@ def upload_folder_to_s3(
     except Exception as e:
         raise ValueError(f"S3 bucket '{bucket_name}' does not exist or is not accessible") from e
 
+    i = 1
     for file_path in all_files:
         relative_path = file_path.relative_to(local_folder)
         s3_key = f"{s3_full_path}/{relative_path}".replace("\\", "/")
 
-        logger.info(f"Uploading {file_path.name} -> s3://{bucket_name}/{s3_key}")
+        logger.info(f"[{i}/{len(all_files)}] "
+                    f"Uploading {file_path.name} -> s3://{bucket_name}/{s3_key}")
         s3_client.upload_file(str(file_path), bucket_name, s3_key)
+        i+=1
 
     logger.info(f"Upload complete: {len(all_files)} files")
