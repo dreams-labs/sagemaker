@@ -1,0 +1,69 @@
+"""
+ETLs for interactions that relate to S3, including uploads of local datasources.
+"""
+import logging
+from pathlib import Path
+import boto3
+
+# set up logger at the module level
+logger = logging.getLogger(__name__)
+
+
+
+# -----------------------------
+#         ETL Functions
+# -----------------------------
+
+def upload_folder_to_s3(
+    local_path: str,
+    bucket_name: str,
+    s3_target_folder: str = ""
+) -> None:
+    """
+    Upload all files from local folder to S3 bucket with confirmation prompt.
+
+    Params:
+    - local_path (str): Path to local folder
+    - bucket_name (str): S3 bucket name
+    - s3_target_folder (str): S3 folder path
+    """
+    local_folder = Path(local_path)
+    expected_extensions = {'.parquet', '.csv', '.json'}
+
+    # Get all files and calculate total size
+    all_files = [f for f in local_folder.rglob("*") if f.is_file()]
+
+    if not all_files:
+        logger.warning(f"No files found in {local_path}")
+        return
+
+    total_size_bytes = sum(f.stat().st_size for f in all_files)
+    total_size_gb = total_size_bytes / (1024**3)
+
+    # Check for unexpected file types
+    unexpected_files = [f for f in all_files if f.suffix.lower() not in expected_extensions]
+    if unexpected_files:
+        logger.warning(f"Found {len(unexpected_files)} files with unexpected extensions: "
+                       f"{[f.suffix for f in unexpected_files]}")
+
+    # Confirmation prompt
+    logger.info(f"Ready to upload {len(all_files)} files with total size {total_size_gb:.2f}GB")
+    logger.info(f"Target: s3://{bucket_name}/{s3_target_folder}")
+    confirmation = input("Proceed with upload? (y/N): ")
+
+    if confirmation.lower() != 'y':
+        logger.info("Upload cancelled")
+        return
+
+    # Proceed with upload
+    s3_client = boto3.client('s3')
+
+    for file_path in all_files:
+        relative_path = file_path.relative_to(local_folder)
+        s3_key = f"{s3_target_folder}/{relative_path}" if s3_target_folder else str(relative_path)
+        s3_key = s3_key.replace("\\", "/")
+
+        logger.info(f"Uploading {file_path.name} -> s3://{bucket_name}/{s3_key}")
+        s3_client.upload_file(str(file_path), bucket_name, s3_key)
+
+    logger.info(f"Upload complete: {len(all_files)} files")
