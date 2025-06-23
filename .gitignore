@@ -8,10 +8,12 @@ logs/notebook_logs.log
 src/utils.py
 
 # ignore everything in loading queue
-s3_wallet_loading_queue/*
-s3_coin_loading_queue/*
-.DS_Store
-src/etls/__pycache__/s3_pipeline.cpython-311.pyc
+s3_uploads/*
 
 # archives
 notebooks/archived/*
+
+# misc files
+.DS_Store
+src/etls/__pycache__/s3_pipeline.cpython-311.pyc
+*.pyc
