@@ -10,3 +10,4 @@ src/utils.py
 # ignore everything in loading queue
 s3_wallet_loading_queue/*
 s3_coin_loading_queue/*
+.DS_Store
