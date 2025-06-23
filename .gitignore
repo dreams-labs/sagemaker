@@ -1,5 +1,14 @@
+# local logs
 logs/notebook_logs_milestone.log
 logs/notebook_logs_display_milestone.log
 logs/notebook_logs_display.log
 logs/notebook_logs.log
+
+# this is just a symlink to the real file in data-science/src/utils.py
 src/utils.py
+
+# ignore everything in loading queue
+s3_wallet_loading_queue/*
+s3_coin_loading_queue/*
+.DS_Store
+src/etls/__pycache__/s3_pipeline.cpython-311.pyc
