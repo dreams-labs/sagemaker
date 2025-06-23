@@ -26,16 +26,23 @@ def upload_folder_to_s3(
     - local_path (str): Path to local folder
     - bucket_name (str): S3 bucket name
     - s3_target_folder (str): S3 folder path
+
+    Raises:
+    - FileNotFoundError: If local_path doesn't exist
+    - ValueError: If local_path contains no files
     """
     local_folder = Path(local_path)
     expected_extensions = {'.parquet', '.csv', '.json'}
+
+    # Check if path exists
+    if not local_folder.exists():
+        raise FileNotFoundError(f"Local path does not exist: {local_path}")
 
     # Get all files and calculate total size
     all_files = [f for f in local_folder.rglob("*") if f.is_file()]
 
     if not all_files:
-        logger.warning(f"No files found in {local_path}")
-        return
+        raise ValueError(f"No files found in {local_path}")
 
     total_size_bytes = sum(f.stat().st_size for f in all_files)
     total_size_gb = total_size_bytes / (1024**3)
@@ -44,7 +51,7 @@ def upload_folder_to_s3(
     unexpected_files = [f for f in all_files if f.suffix.lower() not in expected_extensions]
     if unexpected_files:
         logger.warning(f"Found {len(unexpected_files)} files with unexpected extensions: "
-                       f"{[f.suffix for f in unexpected_files]}")
+                        f"{[f.suffix for f in unexpected_files]}")
 
     # Confirmation prompt
     logger.info(f"Ready to upload {len(all_files)} files with total size {total_size_gb:.2f}GB")
