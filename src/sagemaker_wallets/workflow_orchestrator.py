@@ -21,7 +21,10 @@ class WalletWorkflowOrchestrator:
 
     Params:
     """
-    def __init__(self):
+    def __init__(self, sagewallets_config: dict):
+
+        # Config
+        self.sagewallets_config = sagewallets_config
 
         # Training data variables
         self.training_data = None
@@ -35,14 +38,14 @@ class WalletWorkflowOrchestrator:
 
     def load_training_data(
             self,
-            data_folder: Path,
             date_suffixes: list
         ):
         """
         Load and combine training data across multiple prediction period dates.
 
+        Files are loaded from sagewallets_config.training_data.upload_folder.
+
         Params:
-        - data_folder (Path): Relative location of the training data parquet files
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
 
         Data Split Usage Summary
@@ -61,7 +64,8 @@ class WalletWorkflowOrchestrator:
          world scenario.
         """
         # Data location validation
-        self.data_folder = data_folder
+        upload_folder = self.sagewallets_config['training_data']['upload_folder']
+        self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / upload_folder
         self._validate_data_folder()
 
         if not date_suffixes:

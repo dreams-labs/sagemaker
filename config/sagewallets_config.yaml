@@ -1,0 +1,8 @@
+# SageMaker Config
+
+training_data:
+    upload_folder: dda_861_wallet_graphs_30d
+
+aws:
+    training_bucket: 
+    modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
