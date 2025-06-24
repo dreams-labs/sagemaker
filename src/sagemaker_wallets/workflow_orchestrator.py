@@ -3,8 +3,12 @@ Orchestrates the full wallet modeling workflow data loading management,
 model training coordination, and results handling.
 """
 import logging
+import tempfile
+import os
 from pathlib import Path
 import pandas as pd
+import boto3
+from botocore.exceptions import ClientError
 
 
 # Local modules
@@ -43,7 +47,7 @@ class WalletWorkflowOrchestrator:
         """
         Load and combine training data across multiple prediction period dates.
 
-        Files are loaded from sagewallets_config.training_data.upload_folder.
+        Files are loaded from sagewallets_config.training_data.local_load_folder.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
@@ -64,8 +68,8 @@ class WalletWorkflowOrchestrator:
          world scenario.
         """
         # Data location validation
-        upload_folder = self.sagewallets_config['training_data']['upload_folder']
-        self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / upload_folder
+        load_folder = self.sagewallets_config['training_data']['local_load_folder']
+        self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / load_folder
         self._validate_data_folder()
 
         if not date_suffixes:
@@ -87,12 +91,59 @@ class WalletWorkflowOrchestrator:
         self.training_data = combined_data
 
 
+    def upload_training_data(self, overwrite_existing: bool = False):
+        """
+        Upload all training data splits to S3.
+
+        Params:
+        - overwrite_existing (bool): If True, overwrites existing S3 objects
+
+        Returns:
+        - dict: S3 URIs for each data split
+        """
+        if not self.training_data:
+            raise ValueError("No training data loaded. Call load_training_data() first.")
+
+        s3_client = boto3.client('s3')
+        bucket_name = self.sagewallets_config['aws']['training_bucket']
+        base_folder = 'training_data_processed'
+        folder_prefix = f"{self.sagewallets_config['training_data']['upload_folder']}/"
+
+        s3_uris = {}
+
+        for split_name, df in self.training_data.items():
+            s3_key = f"{base_folder}/{folder_prefix}{split_name}.csv"
+            s3_uri = f"s3://{bucket_name}/{s3_key}"
+
+            # Check if file exists
+            if not overwrite_existing:
+                try:
+                    s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                    logger.info(f"File {s3_key} already exists, skipping upload")
+                    s3_uris[split_name] = s3_uri
+                    continue
+                except ClientError:
+                    pass  # File doesn't exist, proceed with upload
+
+            # Upload file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
+                df.to_csv(temp_file.name, header=False, index=False)
+                temp_file_path = temp_file.name
+
+            s3_client.upload_file(temp_file_path, bucket_name, s3_key)
+            os.unlink(temp_file_path)
+
+            s3_uris[split_name] = s3_uri
+            logger.info(f"Uploaded {split_name} to {s3_uri}")
+
+        return s3_uris
+
+
     def run_training_pipeline(self):
         """
         Trains models for all configured scenarios.
         """
-        modeler = WalletModeler()
-        modeler.set_training_data(self.training_data)
+        modeler = WalletModeler(self.sagewallets_config, self.training_data)
 
 
     def run_scoring_pipeline(self):
@@ -174,3 +225,5 @@ class WalletWorkflowOrchestrator:
                 raise FileNotFoundError(
                     f"No parquet file found starting with '{prefix}' in {self.data_folder}"
                 )
+
+
