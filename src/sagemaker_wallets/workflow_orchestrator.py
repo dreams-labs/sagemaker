@@ -2,8 +2,17 @@
 Orchestrates the full wallet modeling workflow data loading management,
 model training coordination, and results handling.
 """
+import logging
 from pathlib import Path
 import pandas as pd
+
+
+# Local modules
+from sagemaker_wallets.wallet_modeler import WalletModeler
+
+# Set up logger at the module level
+logger = logging.getLogger(__name__)
+
 
 class WalletWorkflowOrchestrator:
     """
@@ -17,21 +26,6 @@ class WalletWorkflowOrchestrator:
         # Training data variables
         self.training_data = None
         self.data_folder = None
-
-
-
-    def download_data_from_s3(self):
-        pass
-
-    def upload_results_to_s3(self):
-        pass
-
-    def run_training_pipeline(self):
-        pass
-
-    def run_scoring_pipeline(self):
-        pass
-
 
 
 
@@ -50,6 +44,21 @@ class WalletWorkflowOrchestrator:
         Params:
         - data_folder (Path): Relative location of the training data parquet files
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
+
+        Data Split Usage Summary
+        -----------------------
+        X_train/y_train: Primary training data for model fitting
+        X_eval/y_eval: Early stopping validation during XGBoost training (prevents overfitting)
+        X_test/y_test: Hold-out test set for final model evaluation (traditional ML validation)
+        X_validation/y_validation: Future time period data for realistic performance assessment
+
+        Key Interactions:
+        The Test set ML metrics (accuracy, R², etc.) are based on data from the same period
+         as the Train set.
+        The Validation set metrics are based on data from the future period just after the
+         base y_train period ends. The Validation set represents actual future data the model
+         would see in production, and Validation metrics measure model performance in a real
+         world scenario.
         """
         # Data location validation
         self.data_folder = data_folder
@@ -74,16 +83,21 @@ class WalletWorkflowOrchestrator:
         self.training_data = combined_data
 
 
+    def run_training_pipeline(self):
+        """
+        Trains models for all configured scenarios.
+        """
+        modeler = WalletModeler()
+        modeler.set_training_data(self.training_data)
 
 
-    def train_model(self):
+    def run_scoring_pipeline(self):
+        """
+        Scores all models from configured scenarios.
+        """
         pass
 
-    def generate_predictions(self):
-        pass
 
-    def evaluate_model(self):
-        pass
 
 
 
@@ -103,21 +117,6 @@ class WalletWorkflowOrchestrator:
 
         Returns:
         - dict: Contains X and y DataFrames for train/test/eval/val splits
-
-        Data Split Usage Summary
-        -----------------------
-        X_train/y_train: Primary training data for model fitting
-        X_eval/y_eval: Early stopping validation during XGBoost training (prevents overfitting)
-        X_test/y_test: Hold-out test set for final model evaluation (traditional ML validation)
-        X_validation/y_validation: Future time period data for realistic performance assessment
-
-        Key Interactions:
-        The Test set ML metrics (accuracy, R², etc.) are based on data from the same period
-         as the Train set.
-        The Validation set metrics are based on data from the future period just after the
-         base y_train period ends. The Validation set represents actual future data the model
-         would see in production, and Validation metrics measure model performance in a real
-         world scenario.
         """
         data = {}
 
