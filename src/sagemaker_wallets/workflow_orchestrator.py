@@ -116,7 +116,8 @@ class WalletWorkflowOrchestrator:
         total_files = len(self.training_data)
 
         # Confirmation prompt
-        logger.info(f"Ready to upload {total_files} training data files ({total_size_gb:.2f}GB) with {total_rows:,} rows.")
+        logger.info(f"Ready to upload {total_files} training data files ({total_size_gb:.2f}GB) "
+                    "with {total_rows:,} rows.")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}")
         confirmation = input("Proceed with upload? (y/N): ")
 
