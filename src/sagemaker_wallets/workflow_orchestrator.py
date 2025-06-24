@@ -109,6 +109,21 @@ class WalletWorkflowOrchestrator:
         base_folder = 'training_data_processed'
         folder_prefix = f"{self.sagewallets_config['training_data']['upload_folder']}/"
 
+        # Calculate total data size for confirmation
+        total_size_bytes = sum(df.memory_usage(deep=True).sum() for df in self.training_data.values())
+        total_size_gb = total_size_bytes / (1024**3)
+        total_rows = sum(len(df) for df in self.training_data.values())
+        total_files = len(self.training_data)
+
+        # Confirmation prompt
+        logger.info(f"Ready to upload {total_files} training data files ({total_size_gb:.2f}GB) with {total_rows:,} rows.")
+        logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}")
+        confirmation = input("Proceed with upload? (y/N): ")
+
+        if confirmation.lower() != 'y':
+            logger.info("Upload cancelled")
+            return {}
+
         s3_uris = {}
 
         for split_name, df in self.training_data.items():
@@ -126,6 +141,7 @@ class WalletWorkflowOrchestrator:
                     pass  # File doesn't exist, proceed with upload
 
             # Upload file
+            logger.info(f"Uploading file {s3_key}")
             with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
                 df.to_csv(temp_file.name, header=False, index=False)
                 temp_file_path = temp_file.name
