@@ -10,8 +10,9 @@ src/utils.py
 # ignore everything in loading queue
 s3_uploads/*
 
-# archives
+# notebook accessory folders
 notebooks/archived/*
+notebooks/temp/*
 
 # misc files
 .DS_Store
