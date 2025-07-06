@@ -68,8 +68,13 @@ class WalletWorkflowOrchestrator:
          would see in production, and Validation metrics measure model performance in a real
          world scenario.
         """
-        # Data location validation
+        # Data location validation with dataset suffix
         load_folder = self.sagewallets_config['training_data']['local_load_folder']
+        dataset = self.sagewallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            load_folder = f"{load_folder}_dev"
+
         self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / load_folder
         self._validate_data_folder()
 
@@ -114,7 +119,14 @@ class WalletWorkflowOrchestrator:
         s3_client = boto3.client('s3')
         bucket_name = self.sagewallets_config['aws']['training_bucket']
         base_folder = 'training_data_processed'
-        folder_prefix = f"{self.sagewallets_config['training_data']['upload_folder']}/"
+
+        upload_folder = self.sagewallets_config['training_data']['upload_folder']
+        dataset = self.sagewallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            upload_folder = f"{upload_folder}_dev"
+
+        folder_prefix = f"{upload_folder}/"
 
         # Calculate total upload size for confirmation
         total_files = len(self.date_suffixes) * 8  # 8 files per date (x_train, y_train, etc.)
@@ -142,11 +154,14 @@ class WalletWorkflowOrchestrator:
                 if not overwrite_existing:
                     try:
                         s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                        logger.info(f"File {s3_key} already exists, skipping upload")
+                        logger.warning(f"File {s3_key} already exists, skipping upload")
                         date_uris[split_name] = s3_uri
                         continue
                     except ClientError:
                         pass  # File doesn't exist, proceed with upload
+
+                # Validate CSV safety before upload
+                self._validate_csv_safety(df, split_name)
 
                 # Upload file
                 logger.info(f"Uploading file {s3_key}")
@@ -249,4 +264,22 @@ class WalletWorkflowOrchestrator:
             if not matching_files:
                 raise FileNotFoundError(
                     f"No parquet file found starting with '{prefix}' in {self.data_folder}"
+                )
+
+
+    def _validate_csv_safety(self, df: pd.DataFrame, split_name: str):
+        """
+        Check for CSV-unsafe characters in DataFrame before upload.
+
+        Params:
+        - df (DataFrame): DataFrame to validate
+        - split_name (str): Name of the data split for error reporting
+        """
+        string_cols = df.select_dtypes(include=['object']).columns
+
+        for col in string_cols:
+            if df[col].astype(str).str.contains('[,"\n\r]', na=False).any():
+                problematic_values = df[col][df[col].astype(str).str.contains('[,"\n\r]', na=False)]
+                raise ValueError(
+                    f"CSV-unsafe characters found in {split_name}.{col}: {problematic_values.iloc[0]}"
                 )

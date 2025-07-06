@@ -1,9 +1,11 @@
-# SageMaker Config
+#SageMaker Config
 
-training_data:
-    local_load_folder: dda_861_wallet_graphs_30d  # where to load local csvs from
-    upload_folder: dda_861_2mos  # new S3 folder name in bucket training_data_processed
+training_data: #SageMaker
+    local_load_folder: dda_879_final_sagemaker_config  # where to load local csvs from
+    upload_folder: dda_879_sagemaker_v0  # new S3 folder name in bucket training_data_processed
+    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
 
-aws:
+
+aws: #SageMaker
     training_bucket: wallet-training-data
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
