@@ -33,6 +33,7 @@ class WalletWorkflowOrchestrator:
         # Training data variables
         self.training_data = None
         self.data_folder = None
+        self.date_suffixes = None
 
 
 
@@ -75,6 +76,9 @@ class WalletWorkflowOrchestrator:
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
 
+        # Store date suffixes for upload method
+        self.date_suffixes = date_suffixes
+
         combined_data = {}
 
         for i, date_suffix in enumerate(date_suffixes):
@@ -93,32 +97,30 @@ class WalletWorkflowOrchestrator:
 
     def upload_training_data(self, overwrite_existing: bool = False):
         """
-        Upload all training data splits to S3.
+        Upload training data splits to S3, organized by date suffix folders.
 
         Params:
         - overwrite_existing (bool): If True, overwrites existing S3 objects
 
         Returns:
-        - dict: S3 URIs for each data split
+        - dict: S3 URIs for each date suffix and data split
         """
         if not self.training_data:
             raise ValueError("No training data loaded. Call load_training_data() first.")
+
+        if not self.date_suffixes:
+            raise ValueError("No date suffixes available. Ensure load_training_data() completed successfully.")
 
         s3_client = boto3.client('s3')
         bucket_name = self.sagewallets_config['aws']['training_bucket']
         base_folder = 'training_data_processed'
         folder_prefix = f"{self.sagewallets_config['training_data']['upload_folder']}/"
 
-        # Calculate total data size for confirmation
-        total_size_bytes = sum(df.memory_usage(deep=True).sum() for df in self.training_data.values())
-        total_size_gb = total_size_bytes / (1024**3)
-        total_rows = sum(len(df) for df in self.training_data.values())
-        total_files = len(self.training_data)
+        # Calculate total upload size for confirmation
+        total_files = len(self.date_suffixes) * 8  # 8 files per date (x_train, y_train, etc.)
 
-        # Confirmation prompt
-        logger.info(f"Ready to upload {total_files} training data files ({total_size_gb:.2f}GB) "
-                    f"with {total_rows:,} rows.")
-        logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}")
+        logger.info(f"Ready to upload {total_files} training data files across {len(self.date_suffixes)} date folders.")
+        logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
         confirmation = input("Proceed with upload? (y/N): ")
 
         if confirmation.lower() != 'y':
@@ -127,31 +129,38 @@ class WalletWorkflowOrchestrator:
 
         s3_uris = {}
 
-        for split_name, df in self.training_data.items():
-            s3_key = f"{base_folder}/{folder_prefix}{split_name}.csv"
-            s3_uri = f"s3://{bucket_name}/{s3_key}"
+        for date_suffix in self.date_suffixes:
+            # Load data for this specific date
+            period_data = self._load_single_date_data(date_suffix)
+            date_uris = {}
 
-            # Check if file exists
-            if not overwrite_existing:
-                try:
-                    s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                    logger.info(f"File {s3_key} already exists, skipping upload")
-                    s3_uris[split_name] = s3_uri
-                    continue
-                except ClientError:
-                    pass  # File doesn't exist, proceed with upload
+            for split_name, df in period_data.items():
+                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
+                s3_uri = f"s3://{bucket_name}/{s3_key}"
 
-            # Upload file
-            logger.info(f"Uploading file {s3_key}")
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
-                df.to_csv(temp_file.name, header=False, index=False)
-                temp_file_path = temp_file.name
+                # Check if file exists
+                if not overwrite_existing:
+                    try:
+                        s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                        logger.info(f"File {s3_key} already exists, skipping upload")
+                        date_uris[split_name] = s3_uri
+                        continue
+                    except ClientError:
+                        pass  # File doesn't exist, proceed with upload
 
-            s3_client.upload_file(temp_file_path, bucket_name, s3_key)
-            os.unlink(temp_file_path)
+                # Upload file
+                logger.info(f"Uploading file {s3_key}")
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
+                    df.to_csv(temp_file.name, header=False, index=False)
+                    temp_file_path = temp_file.name
 
-            s3_uris[split_name] = s3_uri
-            logger.info(f"Uploaded {split_name} to {s3_uri}")
+                s3_client.upload_file(temp_file_path, bucket_name, s3_key)
+                os.unlink(temp_file_path)
+
+                date_uris[split_name] = s3_uri
+                logger.info(f"Uploaded {split_name} to {s3_uri}")
+
+            s3_uris[date_suffix] = date_uris
 
         return s3_uris
 
@@ -178,7 +187,6 @@ class WalletWorkflowOrchestrator:
     # ------------------------
     #      Helper Methods
     # ------------------------
-
 
     def _load_single_date_data(self, date_suffix: str):
         """
@@ -242,5 +250,3 @@ class WalletWorkflowOrchestrator:
                 raise FileNotFoundError(
                     f"No parquet file found starting with '{prefix}' in {self.data_folder}"
                 )
-
-
