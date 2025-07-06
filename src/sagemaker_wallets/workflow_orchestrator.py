@@ -25,10 +25,10 @@ class WalletWorkflowOrchestrator:
 
     Params:
     """
-    def __init__(self, sagewallets_config: dict):
+    def __init__(self, sage_wallets_config: dict):
 
         # Config
-        self.sagewallets_config = sagewallets_config
+        self.sage_wallets_config = sage_wallets_config
 
         # Training data variables
         self.training_data = None
@@ -48,7 +48,7 @@ class WalletWorkflowOrchestrator:
         """
         Load and combine training data across multiple prediction period dates.
 
-        Files are loaded from sagewallets_config.training_data.local_load_folder.
+        Files are loaded from sage_wallets_config.training_data.local_load_folder.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
@@ -69,8 +69,8 @@ class WalletWorkflowOrchestrator:
          world scenario.
         """
         # Data location validation with dataset suffix
-        load_folder = self.sagewallets_config['training_data']['local_load_folder']
-        dataset = self.sagewallets_config['training_data'].get('dataset', 'prod')
+        load_folder = self.sage_wallets_config['training_data']['local_load_folder']
+        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             load_folder = f"{load_folder}_dev"
@@ -116,9 +116,6 @@ class WalletWorkflowOrchestrator:
 
         Params:
         - overwrite_existing (bool): If True, overwrites existing S3 objects
-
-        Returns:
-        - dict: S3 URIs for each date suffix and data split
         """
         if not self.training_data:
             raise ValueError("No training data loaded. Call load_training_data() first.")
@@ -127,11 +124,11 @@ class WalletWorkflowOrchestrator:
             raise ValueError("No date suffixes available. Ensure load_training_data() completed successfully.")
 
         s3_client = boto3.client('s3')
-        bucket_name = self.sagewallets_config['aws']['training_bucket']
+        bucket_name = self.sage_wallets_config['aws']['training_bucket']
         base_folder = 'training_data_processed'
 
-        upload_folder = self.sagewallets_config['training_data']['upload_folder']
-        dataset = self.sagewallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
+        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             upload_folder = f"{upload_folder}_dev"
@@ -149,8 +146,6 @@ class WalletWorkflowOrchestrator:
             logger.info("Upload cancelled")
             return {}
 
-        s3_uris = {}
-
         for date_suffix in self.date_suffixes:
             # Load data for this specific date
             period_data = self._load_single_date_data(date_suffix)
@@ -164,7 +159,7 @@ class WalletWorkflowOrchestrator:
                 if not overwrite_existing:
                     try:
                         s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                        logger.warning(f"File {s3_key} already exists, skipping upload")
+                        logger.info(f"File {s3_key} already exists, skipping upload")
                         date_uris[split_name] = s3_uri
                         continue
                     except ClientError:
@@ -185,16 +180,55 @@ class WalletWorkflowOrchestrator:
                 date_uris[split_name] = s3_uri
                 logger.info(f"Uploaded {split_name} to {s3_uri}")
 
+
+
+    def retrieve_training_data_uris(self, date_suffixes: list):
+        """
+        Generate S3 URIs for training data without uploading.
+        Uses same logic as upload_training_data() for consistency.
+
+        Params:
+        - date_suffixes (list): List of date suffixes (e.g., ["231107", "231201"])
+
+        Returns:
+        - dict: S3 URIs for each date suffix and data split
+        """
+        if not date_suffixes:
+            raise ValueError("date_suffixes cannot be empty")
+
+        bucket_name = self.sage_wallets_config['aws']['training_bucket']
+        base_folder = 'training_data_processed'
+
+        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
+        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            upload_folder = f"{upload_folder}_dev"
+
+        folder_prefix = f"{upload_folder}/"
+
+        s3_uris = {}
+        splits = ['x_train', 'y_train', 'x_test', 'y_test', 'x_eval', 'y_eval', 'x_val', 'y_val']
+
+        for date_suffix in date_suffixes:
+            date_uris = {}
+
+            for split_name in splits:
+                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
+                s3_uri = f"s3://{bucket_name}/{s3_key}"
+                date_uris[split_name] = s3_uri
+
             s3_uris[date_suffix] = date_uris
 
         return s3_uris
+
 
 
     def run_training_pipeline(self):
         """
         Trains models for all configured scenarios.
         """
-        modeler = WalletModeler(self.sagewallets_config, self.training_data)
+        modeler = WalletModeler(self.sage_wallets_config, self.training_data)
 
 
     def run_scoring_pipeline(self):
