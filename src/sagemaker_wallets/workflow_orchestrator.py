@@ -86,6 +86,7 @@ class WalletWorkflowOrchestrator:
 
         combined_data = {}
 
+        logger.info(f"Loading training data for {len(date_suffixes)} periods: {date_suffixes}")
         for i, date_suffix in enumerate(date_suffixes):
             period_data = self._load_single_date_data(date_suffix)
 
@@ -98,6 +99,15 @@ class WalletWorkflowOrchestrator:
                     combined_data[key] = pd.concat([combined_data[key], df], ignore_index=True)
 
         self.training_data = combined_data
+
+        # Success logging with data shape summary
+        total_rows = sum(df.shape[0] for df in combined_data.values())
+        data_splits = list(combined_data.keys())
+        logger.info(f"Training data loaded successfully: {len(data_splits)} splits, {total_rows:,} total rows")
+
+        # Log individual split sizes for debugging
+        for split_name, df in combined_data.items():
+            logger.debug(f"  {split_name}: {df.shape[0]:,} rows × {df.shape[1]} cols")
 
 
     def upload_training_data(self, overwrite_existing: bool = False):
