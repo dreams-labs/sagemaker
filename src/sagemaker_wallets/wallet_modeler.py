@@ -10,11 +10,10 @@ WalletWorkflowOrchestrator: uses this class for model construction
 """
 import logging
 from typing import Dict
-import boto3
+from datetime import datetime
 import sagemaker
 from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
-from datetime import datetime
 
 
 # Set up logger at the module level
