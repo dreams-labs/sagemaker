@@ -86,7 +86,7 @@ class WalletWorkflowOrchestrator:
 
         combined_data = {}
 
-        logger.info(f"<{dataset.upper()}> Loading training data for {len(date_suffixes)} "
+        logger.milestone(f"<{dataset.upper()}> Loading training data for {len(date_suffixes)} "
                     f"periods: {date_suffixes}")
         for i, date_suffix in enumerate(date_suffixes):
             period_data = self._load_single_date_data(date_suffix)
