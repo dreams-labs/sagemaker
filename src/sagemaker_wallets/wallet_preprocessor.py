@@ -49,13 +49,21 @@ class SageWalletsPreprocessor:
             split_name = x_split.replace('x_', '')
 
             # Validate index alignment first
-            self._validate_index_alignment(training_data[x_split], training_data[y_split], split_name)
+            self._validate_index_alignment(
+                training_data[x_split],
+                training_data[y_split],
+                split_name
+            )
 
             # Validate X column consistency across splits
             if x_column_reference is None:
                 x_column_reference = training_data[x_split].columns
             else:
-                self._validate_x_column_consistency(training_data[x_split], x_column_reference, split_name)
+                self._validate_x_column_consistency(
+                    training_data[x_split],
+                    x_column_reference,
+                    split_name
+                )
 
             # Preprocess X data
             x_processed = self._preprocess_x_data(training_data[x_split], x_split)
@@ -66,7 +74,8 @@ class SageWalletsPreprocessor:
             # Store combined data (no separate X/y anymore)
             processed_data[split_name] = combined_data
 
-            logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows × {combined_data.shape[1]} cols.")
+            logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows "
+                        f"× {combined_data.shape[1]} cols.")
 
         return processed_data
 
@@ -87,7 +96,8 @@ class SageWalletsPreprocessor:
         # Ensure numeric data types
         non_numeric_cols = df.select_dtypes(exclude=['number']).columns
         if len(non_numeric_cols) > 0:
-            raise ValueError(f"Non-numeric columns found in {split_name}: {list(non_numeric_cols)}")
+            raise ValueError(f"Non-numeric columns found in {split_name}: "
+                             f"{list(non_numeric_cols)}")
 
         # Convert all to float32 for consistency
         df = df.astype('float32')
@@ -132,7 +142,8 @@ class SageWalletsPreprocessor:
                         elif fill_value == 'median':
                             df[col] = df[col].fillna(df[col].median())
                         else:
-                            raise ValueError(f"Unknown aggregation function '{fill_value}' for column {col}")
+                            raise ValueError(f"Unknown aggregation function '{fill_value}' "
+                                             f"for column {col}")
                     else:
                         # Apply numeric fill
                         df[col] = df[col].fillna(fill_value)
@@ -148,13 +159,19 @@ class SageWalletsPreprocessor:
         # Log unexpected columns that weren't covered by config
         unexpected_columns = [col for col in columns_with_na if col not in filled_columns]
         if unexpected_columns:
-            logger.warning(f"Unexpected columns with NaN values in {split_name}, filled with 0: {unexpected_columns}")
+            logger.warning(f"Unexpected columns with NaN values in {split_name}, "
+                           f"filled with 0: {unexpected_columns}")
 
         logger.info(f"Filled NaN values in {len(columns_with_na)} columns for {split_name}.")
 
         return df
 
-    def _validate_index_alignment(self, x_df: pd.DataFrame, y_df: pd.DataFrame, split_name: str):
+    def _validate_index_alignment(
+            self,
+            x_df: pd.DataFrame,
+            y_df: pd.DataFrame,
+            split_name: str
+        ):
         """
         Validate that X and y DataFrames have matching indices.
 
@@ -180,7 +197,8 @@ class SageWalletsPreprocessor:
 
         Params:
         - x_df (DataFrame): Current X DataFrame to validate
-        - reference_columns (Index): Reference columns from first split
+        - reference_columns (Index): Known columns from a prior X df, used to
+            ensure consistency
         - split_name (str): Name of split for error reporting
         """
         # Validate minimum feature count
@@ -192,7 +210,7 @@ class SageWalletsPreprocessor:
         # Validate columns match
         if len(x_df.columns) != len(reference_columns):
             raise ValueError(f"Column count mismatch in {split_name}: "
-                             "expected {len(reference_columns)}, got {len(x_df.columns)}")
+                             f"expected {len(reference_columns)}, got {len(x_df.columns)}")
 
         if not x_df.columns.equals(reference_columns):
             missing_cols = reference_columns.difference(x_df.columns).tolist()
@@ -210,7 +228,8 @@ class SageWalletsPreprocessor:
                 mismatched_positions = []
                 for i, (ref_col, curr_col) in enumerate(zip(reference_columns, x_df.columns)):
                     if ref_col != curr_col:
-                        mismatched_positions.append(f"pos {i}: expected '{ref_col}', got '{curr_col}'")
+                        mismatched_positions.append(f"pos {i}: expected '{ref_col}', "
+                                                    f"got '{curr_col}'")
                     if len(mismatched_positions) >= 3:  # Limit to first 3 mismatches
                         break
 
