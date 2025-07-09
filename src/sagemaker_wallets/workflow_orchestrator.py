@@ -6,6 +6,7 @@ import logging
 import tempfile
 import os
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
@@ -13,6 +14,7 @@ from botocore.exceptions import ClientError
 
 # Local modules
 from sagemaker_wallets.wallet_modeler import WalletModeler
+import utils as u
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -286,6 +288,26 @@ class WalletWorkflowOrchestrator:
                 # Load the parquet file
                 key = f"{data_type}_{split}"
                 data[key] = pd.read_parquet(matching_files[0])
+
+        # Validate X-y index consistency for each split
+        for split in splits:
+            x_key = f"x_{split}"
+            y_key = f"y_{split}"
+
+            if not np.array_equal(data[x_key].index.values, data[y_key].index.values):
+                raise ValueError(
+                    f"Index mismatch between {x_key} and {y_key} for date {date_suffix}. "
+                    f"Shapes: {x_key}={data[x_key].shape}, {y_key}={data[y_key].shape}"
+                )
+
+        # Validate column consistency across all X DataFrames
+        for split in ['test', 'eval', 'val']:
+            x_key = f"x_{split}"
+            try:
+                u.validate_column_consistency(data['x_train'], data[x_key])
+            except ValueError as e:
+                raise ValueError(f"Column consistency failed between x_train and {x_key} "
+                                 f"for date {date_suffix}: {str(e)}") from e
 
         return data
 
