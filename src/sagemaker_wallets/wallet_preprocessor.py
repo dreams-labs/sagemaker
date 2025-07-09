@@ -183,6 +183,13 @@ class SageWalletsPreprocessor:
         - reference_columns (Index): Reference columns from first split
         - split_name (str): Name of split for error reporting
         """
+        # Validate minimum feature count
+        if len(x_df.columns) < 2:
+            raise ValueError(f"Insufficient features in {split_name}: "
+                             f"{len(x_df.columns)} columns. Need at least "
+                             "2 columns (target will be added as first column).")
+
+        # Validate columns match
         if len(x_df.columns) != len(reference_columns):
             raise ValueError(f"Column count mismatch in {split_name}: "
                              "expected {len(reference_columns)}, got {len(x_df.columns)}")
