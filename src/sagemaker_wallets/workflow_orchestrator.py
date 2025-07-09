@@ -86,7 +86,8 @@ class WalletWorkflowOrchestrator:
 
         combined_data = {}
 
-        logger.info(f"Loading training data for {len(date_suffixes)} periods: {date_suffixes}")
+        logger.milestone(f"<{dataset.upper()}> Loading training data for {len(date_suffixes)} "
+                    f"periods: {date_suffixes}")
         for i, date_suffix in enumerate(date_suffixes):
             period_data = self._load_single_date_data(date_suffix)
 
@@ -103,7 +104,8 @@ class WalletWorkflowOrchestrator:
         # Success logging with data shape summary
         total_rows = sum(df.shape[0] for df in combined_data.values())
         data_splits = list(combined_data.keys())
-        logger.info(f"Training data loaded successfully: {len(data_splits)} splits, {total_rows:,} total rows")
+        logger.info(f"Training data loaded successfully: {len(data_splits)} splits, "
+                    f"{total_rows:,} total rows")
 
         # Log individual split sizes for debugging
         for split_name, df in combined_data.items():
@@ -121,11 +123,12 @@ class WalletWorkflowOrchestrator:
             raise ValueError("No training data loaded. Call load_training_data() first.")
 
         if not self.date_suffixes:
-            raise ValueError("No date suffixes available. Ensure load_training_data() completed successfully.")
+            raise ValueError("No date suffixes available. Ensure load_training_data() completed "
+                             "successfully.")
 
         s3_client = boto3.client('s3')
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training_data_processed'
+        base_folder = 'training-data-raw'
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
@@ -138,7 +141,8 @@ class WalletWorkflowOrchestrator:
         # Calculate total upload size for confirmation
         total_files = len(self.date_suffixes) * 8  # 8 files per date (x_train, y_train, etc.)
 
-        logger.info(f"Ready to upload {total_files} training data files across {len(self.date_suffixes)} date folders.")
+        logger.info(f"<{dataset.upper}> Ready to upload {total_files} training data files "
+                    "across {len(self.date_suffixes)} date folders.")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
         confirmation = input("Proceed with upload? (y/N): ")
 
@@ -197,7 +201,7 @@ class WalletWorkflowOrchestrator:
             raise ValueError("date_suffixes cannot be empty")
 
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training_data_processed'
+        base_folder = 'training-data-raw'
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
