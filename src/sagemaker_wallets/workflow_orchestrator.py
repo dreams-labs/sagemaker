@@ -202,7 +202,7 @@ class WalletWorkflowOrchestrator:
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
-        Generate S3 URIs for training data without uploading.
+        Generate S3 URIs for training data and validate they exist in S3.
         Uses same logic as upload_training_data() for consistency.
 
         Params:
@@ -210,6 +210,9 @@ class WalletWorkflowOrchestrator:
 
         Returns:
         - dict: S3 URIs for each date suffix and data split
+
+        Raises:
+        - FileNotFoundError: If any expected S3 objects don't exist
         """
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
@@ -225,6 +228,7 @@ class WalletWorkflowOrchestrator:
 
         folder_prefix = f"{upload_folder}/"
 
+        s3_client = boto3.client('s3')
         s3_uris = {}
         splits = ['x_train', 'y_train', 'x_test', 'y_test', 'x_eval', 'y_eval', 'x_val', 'y_val']
 
@@ -234,7 +238,16 @@ class WalletWorkflowOrchestrator:
             for split_name in splits:
                 s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
                 s3_uri = f"s3://{bucket_name}/{s3_key}"
-                date_uris[split_name] = s3_uri
+
+                # Validate S3 object exists
+                try:
+                    s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                    date_uris[split_name] = s3_uri
+                except ClientError as e:
+                    if e.response['Error']['Code'] == '404':
+                        raise FileNotFoundError(f"S3 object does not exist: {s3_uri}") from e
+                    else:
+                        raise
 
             s3_uris[date_suffix] = date_uris
 
