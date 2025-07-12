@@ -85,12 +85,12 @@ class WalletModeler:
 
         # Define training data inputs
         train_input = TrainingInput(
-            s3_data=date_uris['x_train'],
+            s3_data=date_uris['train'],
             content_type='text/csv'
         )
 
         validation_input = TrainingInput(
-            s3_data=date_uris['x_test'],
+            s3_data=date_uris['eval'],
             content_type='text/csv'
         )
 

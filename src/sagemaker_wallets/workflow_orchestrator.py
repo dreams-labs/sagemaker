@@ -6,6 +6,7 @@ import logging
 import tempfile
 import os
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
@@ -13,6 +14,7 @@ from botocore.exceptions import ClientError
 
 # Local modules
 from sagemaker_wallets.wallet_modeler import WalletModeler
+import utils as u
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -112,23 +114,29 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"  {split_name}: {df.shape[0]:,} rows × {df.shape[1]} cols")
 
 
-    def upload_training_data(self, overwrite_existing: bool = False):
+    def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
         """
-        Upload training data splits to S3, organized by date suffix folders.
+        Upload preprocessed training data splits to S3, organized by date suffix folders.
+        Filenames include sanitized target variable names for metadata preservation.
 
         Params:
+        - preprocessed_data (dict): Preprocessed data from SageWalletsPreprocessor
         - overwrite_existing (bool): If True, overwrites existing S3 objects
         """
-        if not self.training_data:
-            raise ValueError("No training data loaded. Call load_training_data() first.")
+        if not preprocessed_data:
+            raise ValueError("No preprocessed data provided.")
 
         if not self.date_suffixes:
             raise ValueError("No date suffixes available. Ensure load_training_data() completed "
-                             "successfully.")
+                            "successfully.")
+
+        # Get sanitized target variable name from y_train
+        target_name = self.training_data['y_train'].columns[0]
+        sanitized_target = target_name.replace('|', '_').replace('/', '_')
 
         s3_client = boto3.client('s3')
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training-data-raw'
+        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
@@ -139,10 +147,11 @@ class WalletWorkflowOrchestrator:
         folder_prefix = f"{upload_folder}/"
 
         # Calculate total upload size for confirmation
-        total_files = len(self.date_suffixes) * 8  # 8 files per date (x_train, y_train, etc.)
+        total_files = len(self.date_suffixes) * len(preprocessed_data)
 
-        logger.info(f"<{dataset.upper}> Ready to upload {total_files} training data files "
-                    "across {len(self.date_suffixes)} date folders.")
+        logger.info(f"<{dataset.upper()}> Ready to upload {total_files} preprocessed training data files "
+                    f"across {len(self.date_suffixes)} date folders.")
+        logger.info(f"Target variable: {sanitized_target}")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
         confirmation = input("Proceed with upload? (y/N): ")
 
@@ -150,13 +159,15 @@ class WalletWorkflowOrchestrator:
             logger.info("Upload cancelled")
             return {}
 
+        upload_results = {}
+
         for date_suffix in self.date_suffixes:
-            # Load data for this specific date
-            period_data = self._load_single_date_data(date_suffix)
             date_uris = {}
 
-            for split_name, df in period_data.items():
-                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
+            for split_name, df in preprocessed_data.items():
+                # Enhanced filename with target variable
+                filename = f"{split_name}_{sanitized_target}.csv"
+                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{filename}"
                 s3_uri = f"s3://{bucket_name}/{s3_key}"
 
                 # Check if file exists
@@ -173,7 +184,7 @@ class WalletWorkflowOrchestrator:
                 self._validate_csv_safety(df, split_name)
 
                 # Upload file
-                logger.info(f"Uploading file {s3_key}")
+                logger.info(f"Uploading {split_name}_{sanitized_target} for {date_suffix}: {df.shape[0]:,} rows")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
                     df.to_csv(temp_file.name, header=False, index=False)
                     temp_file_path = temp_file.name
@@ -184,24 +195,31 @@ class WalletWorkflowOrchestrator:
                 date_uris[split_name] = s3_uri
                 logger.info(f"Uploaded {split_name} to {s3_uri}")
 
+            upload_results[date_suffix] = date_uris
+
+        return upload_results
 
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
-        Generate S3 URIs for training data without uploading.
-        Uses same logic as upload_training_data() for consistency.
+        Generate S3 URIs for training data by finding files that match split patterns.
+        Validates files exist and handles target-variable-enhanced filenames.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["231107", "231201"])
 
         Returns:
         - dict: S3 URIs for each date suffix and data split
+
+        Raises:
+        - FileNotFoundError: If any expected S3 objects don't exist
+        - ValueError: If multiple files match the same split pattern
         """
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
 
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training-data-raw'
+        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
@@ -211,22 +229,56 @@ class WalletWorkflowOrchestrator:
 
         folder_prefix = f"{upload_folder}/"
 
+        s3_client = boto3.client('s3')
         s3_uris = {}
-        splits = ['x_train', 'y_train', 'x_test', 'y_test', 'x_eval', 'y_eval', 'x_val', 'y_val']
+        splits = ['train', 'test', 'eval', 'val']  # Preprocessed files combine x and y
 
         for date_suffix in date_suffixes:
             date_uris = {}
 
             for split_name in splits:
-                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
-                s3_uri = f"s3://{bucket_name}/{s3_key}"
-                date_uris[split_name] = s3_uri
+                # List objects with the split prefix
+                prefix = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}"
+
+                try:
+                    response = s3_client.list_objects_v2(
+                        Bucket=bucket_name,
+                        Prefix=prefix
+                    )
+
+                    if 'Contents' not in response:
+                        raise FileNotFoundError("No S3 objects found matching prefix: "
+                                                f"s3://{bucket_name}/{prefix}")
+
+                    # Filter for CSV files that start with the exact split name
+                    matching_objects = [
+                        obj for obj in response['Contents']
+                        if obj['Key'].split('/')[-1].startswith(f"{split_name}_") and obj['Key'].endswith('.csv')
+                    ]
+
+                    if len(matching_objects) == 0:
+                        raise FileNotFoundError(f"No CSV files found starting with '{split_name}_' "
+                                                f"at: s3://{bucket_name}/{prefix}")
+
+                    if len(matching_objects) > 1:
+                        matching_files = [obj['Key'].split('/')[-1] for obj in matching_objects]
+                        raise ValueError(f"Multiple files found for split '{split_name}' in "
+                                         f"{date_suffix}: {matching_files}")
+
+                    # Use the actual filename found
+                    s3_key = matching_objects[0]['Key']
+                    s3_uri = f"s3://{bucket_name}/{s3_key}"
+                    date_uris[split_name] = s3_uri
+
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'NoSuchBucket':
+                        raise FileNotFoundError(f"S3 bucket does not exist: {bucket_name}") from e
+                    else:
+                        raise
 
             s3_uris[date_suffix] = date_uris
 
         return s3_uris
-
-
 
     def run_training_pipeline(self):
         """
@@ -286,6 +338,26 @@ class WalletWorkflowOrchestrator:
                 # Load the parquet file
                 key = f"{data_type}_{split}"
                 data[key] = pd.read_parquet(matching_files[0])
+
+        # Validate X-y index consistency for each split
+        for split in splits:
+            x_key = f"x_{split}"
+            y_key = f"y_{split}"
+
+            if not np.array_equal(data[x_key].index.values, data[y_key].index.values):
+                raise ValueError(
+                    f"Index mismatch between {x_key} and {y_key} for date {date_suffix}. "
+                    f"Shapes: {x_key}={data[x_key].shape}, {y_key}={data[y_key].shape}"
+                )
+
+        # Validate column consistency across all X DataFrames
+        for split in ['test', 'eval', 'val']:
+            x_key = f"x_{split}"
+            try:
+                u.validate_column_consistency(data['x_train'], data[x_key])
+            except ValueError as e:
+                raise ValueError(f"Column consistency failed between x_train and {x_key} "
+                                 f"for date {date_suffix}: {str(e)}") from e
 
         return data
 

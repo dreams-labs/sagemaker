@@ -250,7 +250,12 @@ class SageWalletsPreprocessor:
         Returns:
         - DataFrame: Combined data with target as first column, no headers
         """
+        if len(y_df.columns) != 1:
+            raise ValueError(f"Found {len(y_df.columns)} columns in y df, which "
+                             "should only have 1 column.")
+
         # Combine with target as first column
         combined_df = pd.concat([y_df, x_df], axis=1)
+        logger.info(f"Merged y df with target var {y_df.columns[0]} with X data.")
 
         return combined_df
