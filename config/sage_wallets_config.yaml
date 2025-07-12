@@ -1,11 +1,21 @@
 #SageMaker Config
 
 training_data: #SageMaker
-    local_load_folder: dda_879_final_sagemaker_config  # where to load local csvs from
-    upload_folder: dda_879_sagemaker_v0  # new S3 folder name in bucket training_data_processed
-    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
+    local_load_folder: dda_897_td_column_ordering_v1  # where to load local csvs from
+    upload_folder: dda-897-td-col-ordering  # new S3 folder name in bucket training_data_processed
+    dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
+preprocessing: #SageMaker
+    fill_na:
+        coin_trends: -1
+        mktcap: -1
+        performance: 0
+        scenario|ideal: max
+        scenario|worst: min
+        scenario|net_perf: mean
+        transfers: -1
 
 aws: #SageMaker
     training_bucket: wallet-training-data
+    preprocessed_folder: training-data-preprocessed
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
