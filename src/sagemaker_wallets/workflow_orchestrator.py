@@ -202,8 +202,8 @@ class WalletWorkflowOrchestrator:
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
-        Generate S3 URIs for training data and validate they exist in S3.
-        Uses same logic as upload_training_data() for consistency.
+        Generate S3 URIs for training data by finding files that match split patterns.
+        Validates files exist and handles target-variable-enhanced filenames.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["231107", "231201"])
@@ -213,6 +213,7 @@ class WalletWorkflowOrchestrator:
 
         Raises:
         - FileNotFoundError: If any expected S3 objects don't exist
+        - ValueError: If multiple files match the same split pattern
         """
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
@@ -230,30 +231,54 @@ class WalletWorkflowOrchestrator:
 
         s3_client = boto3.client('s3')
         s3_uris = {}
-        splits = ['x_train', 'y_train', 'x_test', 'y_test', 'x_eval', 'y_eval', 'x_val', 'y_val']
+        splits = ['train', 'test', 'eval', 'val']  # Preprocessed files combine x and y
 
         for date_suffix in date_suffixes:
             date_uris = {}
 
             for split_name in splits:
-                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
-                s3_uri = f"s3://{bucket_name}/{s3_key}"
+                # List objects with the split prefix
+                prefix = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}"
 
-                # Validate S3 object exists
                 try:
-                    s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                    response = s3_client.list_objects_v2(
+                        Bucket=bucket_name,
+                        Prefix=prefix
+                    )
+
+                    if 'Contents' not in response:
+                        raise FileNotFoundError("No S3 objects found matching prefix: "
+                                                f"s3://{bucket_name}/{prefix}")
+
+                    # Filter for CSV files that start with the exact split name
+                    matching_objects = [
+                        obj for obj in response['Contents']
+                        if obj['Key'].split('/')[-1].startswith(f"{split_name}_") and obj['Key'].endswith('.csv')
+                    ]
+
+                    if len(matching_objects) == 0:
+                        raise FileNotFoundError(f"No CSV files found starting with '{split_name}_' "
+                                                f"at: s3://{bucket_name}/{prefix}")
+
+                    if len(matching_objects) > 1:
+                        matching_files = [obj['Key'].split('/')[-1] for obj in matching_objects]
+                        raise ValueError(f"Multiple files found for split '{split_name}' in "
+                                         f"{date_suffix}: {matching_files}")
+
+                    # Use the actual filename found
+                    s3_key = matching_objects[0]['Key']
+                    s3_uri = f"s3://{bucket_name}/{s3_key}"
                     date_uris[split_name] = s3_uri
+
                 except ClientError as e:
-                    if e.response['Error']['Code'] == '404':
-                        raise FileNotFoundError(f"S3 object does not exist: {s3_uri}") from e
+                    if e.response['Error']['Code'] == 'NoSuchBucket':
+                        raise FileNotFoundError(f"S3 bucket does not exist: {bucket_name}") from e
                     else:
                         raise
 
             s3_uris[date_suffix] = date_uris
 
         return s3_uris
-
-
 
     def run_training_pipeline(self):
         """
