@@ -114,23 +114,24 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"  {split_name}: {df.shape[0]:,} rows × {df.shape[1]} cols")
 
 
-    def upload_training_data(self, overwrite_existing: bool = False):
+    def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
         """
-        Upload training data splits to S3, organized by date suffix folders.
+        Upload preprocessed training data splits to S3, organized by date suffix folders.
 
         Params:
+        - preprocessed_data (dict): Preprocessed data from SageWalletsPreprocessor
         - overwrite_existing (bool): If True, overwrites existing S3 objects
         """
-        if not self.training_data:
-            raise ValueError("No training data loaded. Call load_training_data() first.")
+        if not preprocessed_data:
+            raise ValueError("No preprocessed data provided.")
 
         if not self.date_suffixes:
             raise ValueError("No date suffixes available. Ensure load_training_data() completed "
-                             "successfully.")
+                            "successfully.")
 
         s3_client = boto3.client('s3')
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training-data-raw'
+        base_folder = 'training-data-preprocessed'
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
@@ -141,10 +142,10 @@ class WalletWorkflowOrchestrator:
         folder_prefix = f"{upload_folder}/"
 
         # Calculate total upload size for confirmation
-        total_files = len(self.date_suffixes) * 8  # 8 files per date (x_train, y_train, etc.)
+        total_files = len(self.date_suffixes) * len(preprocessed_data)  # 4 files per date (train, test, eval, val)
 
-        logger.info(f"<{dataset.upper}> Ready to upload {total_files} training data files "
-                    "across {len(self.date_suffixes)} date folders.")
+        logger.info(f"<{dataset.upper()}> Ready to upload {total_files} preprocessed training data files "
+                    f"across {len(self.date_suffixes)} date folders.")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
         confirmation = input("Proceed with upload? (y/N): ")
 
@@ -152,12 +153,12 @@ class WalletWorkflowOrchestrator:
             logger.info("Upload cancelled")
             return {}
 
+        upload_results = {}
+
         for date_suffix in self.date_suffixes:
-            # Load data for this specific date
-            period_data = self._load_single_date_data(date_suffix)
             date_uris = {}
 
-            for split_name, df in period_data.items():
+            for split_name, df in preprocessed_data.items():
                 s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
                 s3_uri = f"s3://{bucket_name}/{s3_key}"
 
@@ -175,7 +176,7 @@ class WalletWorkflowOrchestrator:
                 self._validate_csv_safety(df, split_name)
 
                 # Upload file
-                logger.info(f"Uploading file {s3_key}")
+                logger.info(f"Uploading {split_name} for {date_suffix}: {df.shape[0]:,} rows")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
                     df.to_csv(temp_file.name, header=False, index=False)
                     temp_file_path = temp_file.name
@@ -185,6 +186,10 @@ class WalletWorkflowOrchestrator:
 
                 date_uris[split_name] = s3_uri
                 logger.info(f"Uploaded {split_name} to {s3_uri}")
+
+            upload_results[date_suffix] = date_uris
+
+        return upload_results
 
 
 
