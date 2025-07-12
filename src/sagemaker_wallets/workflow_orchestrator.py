@@ -117,6 +117,7 @@ class WalletWorkflowOrchestrator:
     def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
         """
         Upload preprocessed training data splits to S3, organized by date suffix folders.
+        Filenames include sanitized target variable names for metadata preservation.
 
         Params:
         - preprocessed_data (dict): Preprocessed data from SageWalletsPreprocessor
@@ -129,9 +130,13 @@ class WalletWorkflowOrchestrator:
             raise ValueError("No date suffixes available. Ensure load_training_data() completed "
                             "successfully.")
 
+        # Get sanitized target variable name from y_train
+        target_name = self.training_data['y_train'].columns[0]
+        sanitized_target = target_name.replace('|', '_').replace('/', '_')
+
         s3_client = boto3.client('s3')
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training-data-preprocessed'
+        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
@@ -142,10 +147,11 @@ class WalletWorkflowOrchestrator:
         folder_prefix = f"{upload_folder}/"
 
         # Calculate total upload size for confirmation
-        total_files = len(self.date_suffixes) * len(preprocessed_data)  # 4 files per date (train, test, eval, val)
+        total_files = len(self.date_suffixes) * len(preprocessed_data)
 
         logger.info(f"<{dataset.upper()}> Ready to upload {total_files} preprocessed training data files "
                     f"across {len(self.date_suffixes)} date folders.")
+        logger.info(f"Target variable: {sanitized_target}")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
         confirmation = input("Proceed with upload? (y/N): ")
 
@@ -159,7 +165,9 @@ class WalletWorkflowOrchestrator:
             date_uris = {}
 
             for split_name, df in preprocessed_data.items():
-                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}.csv"
+                # Enhanced filename with target variable
+                filename = f"{split_name}_{sanitized_target}.csv"
+                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{filename}"
                 s3_uri = f"s3://{bucket_name}/{s3_key}"
 
                 # Check if file exists
@@ -176,7 +184,7 @@ class WalletWorkflowOrchestrator:
                 self._validate_csv_safety(df, split_name)
 
                 # Upload file
-                logger.info(f"Uploading {split_name} for {date_suffix}: {df.shape[0]:,} rows")
+                logger.info(f"Uploading {split_name}_{sanitized_target} for {date_suffix}: {df.shape[0]:,} rows")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
                     df.to_csv(temp_file.name, header=False, index=False)
                     temp_file_path = temp_file.name
@@ -190,7 +198,6 @@ class WalletWorkflowOrchestrator:
             upload_results[date_suffix] = date_uris
 
         return upload_results
-
 
 
     def retrieve_training_data_uris(self, date_suffixes: list):
@@ -208,7 +215,7 @@ class WalletWorkflowOrchestrator:
             raise ValueError("date_suffixes cannot be empty")
 
         bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = 'training-data-raw'
+        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
 
         upload_folder = self.sage_wallets_config['training_data']['upload_folder']
         dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
