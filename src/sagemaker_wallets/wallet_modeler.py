@@ -176,9 +176,90 @@ class WalletModeler:
         }
 
 
-    def generate_predictions(self):
+    def load_existing_model(self, date_suffix: str):
         """
-        Generate predictions on validation set for future period performance assessment.
+        Load the most recent trained model for a given date_suffix.
+
+        Params:
+        - date_suffix (str): Date suffix used in training (e.g., '250301')
+
+        Returns:
+        - dict: Contains model URI and training job name of most recent model
+        """
+        # Extract upload_folder from config
+        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
+        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            upload_folder = f"{upload_folder}_dev"
+
+        bucket_name = self.sage_wallets_config['aws']['training_bucket']
+        base_prefix = f"sagemaker-models/{upload_folder}/"
+
+        # List all objects under the upload folder
+        s3_client = self.sagemaker_session.boto_session.client('s3')
+
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=bucket_name,
+                Prefix=base_prefix,
+                Delimiter='/'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucket':
+                raise FileNotFoundError(f"Training bucket does not exist: {bucket_name}") from e
+            else:
+                raise ConfigError(f"Unable to access S3 bucket {bucket_name}: {e}") from e
+
+        if 'CommonPrefixes' not in response:
+            raise FileNotFoundError(f"No models found under path: s3://{bucket_name}/{base_prefix}")
+
+        # Filter for training job folders matching our pattern
+        job_name_pattern = f"wallet-xgb-{upload_folder}-{date_suffix}-"
+        matching_folders = []
+
+        for prefix_info in response['CommonPrefixes']:
+            folder_path = prefix_info['Prefix']
+            folder_name = folder_path.rstrip('/').split('/')[-1]
+
+            if folder_name.startswith(job_name_pattern):
+                # Extract timestamp from folder name
+                timestamp_part = folder_name[len(job_name_pattern):]
+                matching_folders.append((timestamp_part, folder_name, folder_path))
+
+        if not matching_folders:
+            raise FileNotFoundError(f"No models found for upload_folder '{upload_folder}' and "
+                                    f"date_suffix '{date_suffix}' "
+                                    f"under path: s3://{bucket_name}/{base_prefix}")
+
+        # Sort by timestamp to get most recent (assuming YYYYMMDD-HHMMSS format)
+        matching_folders.sort(key=lambda x: x[0], reverse=True)
+        most_recent_timestamp, most_recent_job_name, most_recent_folder_path = matching_folders[0]
+
+        # Construct model URI and validate it exists
+        model_uri = f"s3://{bucket_name}/{most_recent_folder_path}output/model.tar.gz"
+        model_s3_key = f"{most_recent_folder_path}output/model.tar.gz"
+
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=model_s3_key)
+        except ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                raise FileNotFoundError(f"Model file not found at expected location: {model_uri}") from e
+            else:
+                raise ValueError(f"Unable to access model file at {model_uri}: {e}") from e
+
+        # Store model artifacts
+        self.model_uri = model_uri
+        self.training_job_name = most_recent_job_name
+
+        logger.info(f"Loaded most recent model (timestamp: {most_recent_timestamp}): {model_uri}")
+
+        return {
+            'model_uri': model_uri,
+            'training_job_name': most_recent_job_name,
+            'timestamp': most_recent_timestamp
+        }
+
         """
         if not self.model_uri:
             raise ValueError("No trained model available. Call train_model() first.")
