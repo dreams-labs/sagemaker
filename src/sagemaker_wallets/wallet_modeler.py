@@ -11,6 +11,9 @@ WalletWorkflowOrchestrator: uses this class for model construction
 import logging
 from typing import Dict
 from datetime import datetime
+import tarfile
+import boto3
+from pathlib import Path
 from botocore.exceptions import ClientError
 import sagemaker
 from sagemaker.estimator import Estimator
@@ -336,3 +339,69 @@ class WalletModeler:
             'predictions_uri': self.predictions_uri,
             'input_data_uri': date_uris['val']
         }
+
+
+    def download_existing_model(self) -> str:
+        """
+        Download and extract model artifacts from S3 to persistent models directory.
+
+        Returns:
+        - str: Local path to extracted XGBoost model file
+
+        Raises:
+        - ValueError: If no model URI available
+        - FileNotFoundError: If model artifacts not found at S3 location
+        """
+        if not self.model_uri:
+            raise ValueError("No model URI available. Call train_model() or load_existing_model() first.")
+
+        # Parse S3 URI
+        if not self.model_uri.startswith('s3://'):
+            raise ValueError(f"Invalid S3 URI format: {self.model_uri}")
+
+        uri_parts = self.model_uri.replace('s3://', '').split('/', 1)
+        bucket_name = uri_parts[0]
+        s3_key = uri_parts[1]
+
+        # Create models directory matching training data structure
+        load_folder = self.wallets_config['training_data']['local_load_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            load_folder = f"{load_folder}_dev"
+
+        models_dir = Path('../models') / load_folder
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        tar_path = models_dir / 'model.tar.gz'
+
+        # Download if not already exists
+        if not tar_path.exists():
+            s3_client = boto3.client('s3')
+
+            try:
+                logger.info(f"Downloading model from {self.model_uri}")
+                s3_client.download_file(bucket_name, s3_key, str(tar_path))
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    raise FileNotFoundError(f"Model not found at {self.model_uri}") from e
+                else:
+                    raise
+        else:
+            logger.info(f"Using existing model archive: {tar_path}")
+
+        # Extract tar.gz
+        with tarfile.open(tar_path, 'r:gz') as tar:
+            tar.extractall(models_dir)
+
+        # Find the actual model file
+        model_files = list(models_dir.glob('xgboost-model*'))
+        if not model_files:
+            model_files = list(models_dir.glob('*.model'))
+        if not model_files:
+            raise FileNotFoundError(f"No XGBoost model file found in {models_dir}")
+
+        model_path = str(model_files[0])
+        logger.info(f"Model ready at: {model_path}")
+
+        return model_path
