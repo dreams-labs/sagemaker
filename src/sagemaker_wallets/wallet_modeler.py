@@ -30,20 +30,25 @@ logger = logging.getLogger(__name__)
 class WalletModeler:
     """
     Handles model training and prediction generation for wallet-coin performance modeling
-     using SageMaker with S3 data sources.
+     using SageMaker with S3 data sources. Manages SageMaker infrastructure configuration,
+     hyperparameter settings, and model artifacts for wallet performance prediction workflows.
 
-    Manages SageMaker infrastructure configuration, hyperparameter settings, and
-     model artifacts for wallet performance prediction workflows.
+    The modeling period is specified using the date_suffix param. Each WalletModeler is
+     responsible for generating the specified modeling period's predictions using
+     that modeling period's training data.
 
     Params:
     - wallets_config (dict): abbreviated name for sage_wallets_config.yaml
     - modeling_config (dict): abbreviated name for sage_wallets_modeling_config.yaml
+    - date_suffix (str): the modeling_period_start of the training data with which to
+        build the model.
     """
     def __init__(
             self,
             wallets_config: Dict,
             modeling_config: Dict,
-            s3_uris: Dict[str, Dict[str, str]]
+            s3_uris: Dict[str, Dict[str, str]],
+            date_suffix: str
         ):
         # Configs
         ucv.validate_sage_wallets_config(wallets_config)
@@ -55,6 +60,7 @@ class WalletModeler:
         self.sagemaker_session = sagemaker.Session()
         self.role = wallets_config['aws']['modeler_arn']
         self.s3_uris = s3_uris
+        self.date_suffix = date_suffix
 
         # Model artifacts
         self.model_uri = None
@@ -65,13 +71,10 @@ class WalletModeler:
     #      Public Methods
     # ------------------------
 
-    def train_model(self, date_suffix: str):
+    def train_model(self):
         """
         Train model using SageMaker's built-in algorithm.
          Uses train/test splits with eval for early stopping.
-
-        Params:
-        - date_suffix (str): Specific date to train model for (required).
 
         Returns:
         - dict: Contains model URI and training job name
@@ -79,17 +82,17 @@ class WalletModeler:
         logger.info("Starting SageMaker training...")
 
         # Validate date suffix
-        if date_suffix not in self.s3_uris:
+        if self.date_suffix not in self.s3_uris:
             available_dates = list(self.s3_uris.keys())
-            raise ConfigError(f"Date suffix '{date_suffix}' not found in S3 URIs. Available: {available_dates}")
+            raise ConfigError(f"Date suffix '{self.date_suffix}' not found in S3 URIs. Available: {available_dates}")
 
-        date_uris = self.s3_uris[date_suffix]
+        date_uris = self.s3_uris[self.date_suffix]
 
         # Validate required training data
         required_splits = ['train', 'eval']
         for split in required_splits:
             if split not in date_uris:
-                raise ConfigError(f"{split.capitalize()} data URI not found for date {date_suffix}")
+                raise ConfigError(f"{split.capitalize()} data URI not found for date {self.date_suffix}")
 
         # Configure estimator with basic hyperparameters
         model_container = sagemaker.image_uris.retrieve(
@@ -154,7 +157,7 @@ class WalletModeler:
 
         # Launch training job with descriptive name
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        job_name = f"wallet-xgb-{upload_folder}-{date_suffix}-{timestamp}"
+        job_name = f"wallet-xgb-{upload_folder}-{self.date_suffix}-{timestamp}"
 
         logger.info(f"Launching training job: {job_name}")
         logger.info(f"Model output path: {model_output_path}")
@@ -176,16 +179,13 @@ class WalletModeler:
         return {
             'model_uri': self.model_uri,
             'training_job_name': job_name,
-            'date_suffix': date_suffix
+            'date_suffix': self.date_suffix
         }
 
 
-    def load_existing_model(self, date_suffix: str):
+    def load_existing_model(self):
         """
         Load the most recent trained model for a given date_suffix.
-
-        Params:
-        - date_suffix (str): Date suffix used in training (e.g., '250301')
 
         Returns:
         - dict: Contains model URI and training job name of most recent model
@@ -219,7 +219,7 @@ class WalletModeler:
             raise FileNotFoundError(f"No models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
-        job_name_pattern = f"wallet-xgb-{upload_folder}-{date_suffix}-"
+        job_name_pattern = f"wallet-xgb-{upload_folder}-{self.date_suffix}-"
         matching_folders = []
 
         for prefix_info in response['CommonPrefixes']:
@@ -233,7 +233,7 @@ class WalletModeler:
 
         if not matching_folders:
             raise FileNotFoundError(f"No models found for upload_folder '{upload_folder}' and "
-                                    f"date_suffix '{date_suffix}' "
+                                    f"date_suffix '{self.date_suffix}' "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
         # Sort by timestamp to get most recent (assuming YYYYMMDD-HHMMSS format)
@@ -274,11 +274,11 @@ class WalletModeler:
         if not self.model_uri:
             raise ValueError("No trained model available. Call train_model() or load_existing_model() first.")
 
-        # Use first available date for validation data
+        # Use date_suffix from instance variable
         if not self.s3_uris:
             raise ConfigError("No S3 URIs available. Ensure training data has been configured.")
 
-        date_suffix = list(self.s3_uris.keys())[0]
+        date_suffix = self.date_suffix
         date_uris = self.s3_uris[date_suffix]
 
         if 'val' not in date_uris:
