@@ -46,7 +46,7 @@ class WalletModeler:
 
         # Model artifacts
         self.model_uri = None
-        self.training_job_name = None
+        self.predictions_uri = None
 
 
     # ------------------------
@@ -110,7 +110,8 @@ class WalletModeler:
             )
 
             if 'Contents' in response:
-                confirmation = input(f"Model {model_output_path} already exists. Overwrite existing model? (y/N): ")
+                confirmation = input(f"Model {model_output_path} already exists. "
+                                     "Overwrite existing model? (y/N): ")
                 if confirmation.lower() != 'y':
                     logger.info("Training cancelled by user")
                     return {}
@@ -165,13 +166,12 @@ class WalletModeler:
 
         # Store training artifacts
         self.model_uri = xgb_estimator.model_data
-        self.training_job_name = job_name
 
         logger.info(f"Training completed. Model stored at: {self.model_uri}")
 
         return {
             'model_uri': self.model_uri,
-            'training_job_name': self.training_job_name,
+            'training_job_name': job_name,
             'date_suffix': date_suffix
         }
 
@@ -250,7 +250,6 @@ class WalletModeler:
 
         # Store model artifacts
         self.model_uri = model_uri
-        self.training_job_name = most_recent_job_name
 
         logger.info(f"Loaded most recent model (timestamp: {most_recent_timestamp}): {model_uri}")
 
@@ -260,20 +259,90 @@ class WalletModeler:
             'timestamp': most_recent_timestamp
         }
 
+
+    def predict_with_model(self):
+        """
+        Score validation data using trained model via SageMaker batch transform.
+
+        Returns:
+        - dict: Contains transform job name and output S3 URI
         """
         if not self.model_uri:
-            raise ValueError("No trained model available. Call train_model() first.")
+            raise ValueError("No trained model available. Call train_model() or load_existing_model() first.")
 
-        # Implementation for batch transform or real-time inference
-        pass
+        # Use first available date for validation data
+        if not self.s3_uris:
+            raise ConfigError("No S3 URIs available. Ensure training data has been configured.")
 
+        date_suffix = list(self.s3_uris.keys())[0]
+        date_uris = self.s3_uris[date_suffix]
 
-    def evaluate_model(self):
-        """
-        Evaluate model performance on validation set (future period data).
-        """
-        if not self.model_uri:
-            raise ValueError("No trained model available. Call train_model() first.")
+        if 'val' not in date_uris:
+            raise FileNotFoundError(f"Validation data URI not found for date {date_suffix}")
 
-        # Implementation for validation metrics
-        pass
+        # Create model for batch transform
+        xgb_container = sagemaker.image_uris.retrieve(
+            framework='xgboost',
+            region=self.sagemaker_session.boto_region_name,
+            version='1.5-1'
+        )
+
+        # Create model in SageMaker registry with deterministic naming
+        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
+        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            upload_folder = f"{upload_folder}_dev"
+
+        model_name = f"wallet-model-{upload_folder}"
+
+        model = Model(
+            image_uri=xgb_container,
+            model_data=self.model_uri,
+            role=self.role,
+            sagemaker_session=self.sagemaker_session,
+            name=model_name
+        )
+
+        # Register model in SageMaker
+        model.create()
+
+        # Configure batch transform job
+        timestamp = datetime.now().strftime("%H%M%S")
+        job_name = f"wallet-scoring-{date_suffix}-{timestamp}"
+
+        output_path = f"s3://{self.sage_wallets_config['aws']['training_bucket']}/validation-data-scored/"
+
+        transformer = Transformer(
+            model_name=model_name,
+            instance_count=1,
+            instance_type='ml.m5.large',
+            output_path=output_path,
+            sagemaker_session=self.sagemaker_session
+        )
+
+        # Deploy model if needed
+        logger.info(f"Starting batch transform job: {job_name}")
+        logger.info(f"Using model: {model_name}")
+        logger.info(f"Input data: {date_uris['val']}")
+        logger.info(f"Output path: {output_path}")
+
+        # Start batch transform
+        transformer.transform(
+            data=date_uris['val'],
+            content_type='text/csv',
+            split_type='Line',
+            job_name=job_name,
+            wait=True
+        )
+
+        # Store predictions URI
+        self.predictions_uri = f"{output_path}{job_name}/{date_uris['val'].split('/')[-1]}.out"
+
+        logger.info(f"Batch transform completed. Predictions at: {self.predictions_uri}")
+
+        return {
+            'transform_job_name': job_name,
+            'predictions_uri': self.predictions_uri,
+            'input_data_uri': date_uris['val']
+        }
