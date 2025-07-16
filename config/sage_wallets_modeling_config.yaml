@@ -9,7 +9,7 @@ training:
 
     #KeyParam Hyperparameters
     hyperparameters:
-        objective: reg:squarederror
+        objective: reg:linear
         num_round: 100
         max_depth: 6
         eta: 0.3
