@@ -62,6 +62,13 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
+        # Store dataset and upload folder as instance state
+        self.dataset = wallets_config['training_data'].get('dataset', 'dev')
+        base_upload_folder = wallets_config['training_data']['upload_folder']
+        if self.dataset == 'dev':
+            base_upload_folder = f"{base_upload_folder}-dev"
+        self.upload_folder = base_upload_folder
+
         # Model artifacts
         self.model_uri = None
         self.predictions_uri = None
@@ -101,21 +108,14 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        # Extract upload_folder from config for naming
-        upload_folder = self.wallets_config['training_data']['upload_folder']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_folder = f"{upload_folder}-dev"
-
         # Create descriptive model output path
         model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
-                             f"sagemaker-models/{upload_folder}/")
+                             f"sagemaker-models/{self.upload_folder}/")
 
         # Check if model output path already exists
         s3_client = self.sagemaker_session.boto_session.client('s3')
         bucket_name = self.wallets_config['aws']['training_bucket']
-        prefix = f"sagemaker-models/{upload_folder}/"
+        prefix = f"sagemaker-models/{self.upload_folder}/"
 
         try:
             response = s3_client.list_objects_v2(
@@ -157,7 +157,7 @@ class WalletModeler:
 
         # Launch training job with descriptive name
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        job_name = f"wallet-xgb-{upload_folder}-{self.date_suffix}-{timestamp}"
+        job_name = f"wallet-xgb-{self.upload_folder}-{self.date_suffix}-{timestamp}"
 
         logger.info(f"Launching training job: {job_name}")
         logger.info(f"Model output path: {model_output_path}")
@@ -190,15 +190,8 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name of most recent model
         """
-        # Extract upload_folder from config
-        upload_folder = self.wallets_config['training_data']['upload_folder']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_folder = f"{upload_folder}-dev"
-
         bucket_name = self.wallets_config['aws']['training_bucket']
-        base_prefix = f"sagemaker-models/{upload_folder}/"
+        base_prefix = f"sagemaker-models/{self.upload_folder}/"
 
         # List all objects under the upload folder
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -219,7 +212,7 @@ class WalletModeler:
             raise FileNotFoundError(f"No models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
-        job_name_pattern = f"wallet-xgb-{upload_folder}-{self.date_suffix}-"
+        job_name_pattern = f"wallet-xgb-{self.upload_folder}-{self.date_suffix}-"
         matching_folders = []
 
         for prefix_info in response['CommonPrefixes']:
@@ -232,8 +225,8 @@ class WalletModeler:
                 matching_folders.append((timestamp_part, folder_name, folder_path))
 
         if not matching_folders:
-            raise FileNotFoundError(f"No models found for upload_folder '{upload_folder}' and "
-                                    f"date_suffix '{self.date_suffix}' "
+            raise FileNotFoundError(f"No models found for upload_folder '{self.upload_folder}' "
+                                    f"and date_suffix '{self.date_suffix}' "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
         # Sort by timestamp to get most recent (assuming YYYYMMDD-HHMMSS format)
@@ -264,7 +257,7 @@ class WalletModeler:
         }
 
 
-    def predict_with_model(self):
+    def predict_with_cloud_model(self):
         """
         Score validation data using trained model via SageMaker batch transform.
 
@@ -291,14 +284,7 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        # Create model in SageMaker registry with deterministic naming
-        upload_folder = self.wallets_config['training_data']['upload_folder']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_folder = f"{upload_folder}_dev"
-
-        model_name = f"wallet-model-{upload_folder}"
+        model_name = f"wallet-model-{self.upload_folder}"
 
         model = Model(
             image_uri=xgb_container,
