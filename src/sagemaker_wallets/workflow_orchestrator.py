@@ -455,6 +455,20 @@ class WalletWorkflowOrchestrator:
             f"{context.total_size_mb:.1f} MB of preprocessed training data "
             f"across {len(self.date_suffixes)} date folders."
         )
+
+        # If overwrite allowed, check for existing files to determine if an overwrite will actually happen
+        if context.overwrite_existing:
+            s3_client = boto3.client("s3")
+            for suffix in self.date_suffixes:
+                prefix = f"{context.base_folder}/{context.folder_prefix}{suffix}/"
+                resp = s3_client.list_objects_v2(
+                    Bucket=context.bucket_name, Prefix=prefix, MaxKeys=1
+                )
+                if resp.get("KeyCount", 0) > 0:
+                    logger.milestone("This upload will overwrite existing files.")
+                    break
+
+        # Log upload information and request approval
         logger.info(f"Target variable: {context.sanitized_target}")
         logger.info(
             f"Target: s3://{context.bucket_name}/"
@@ -465,6 +479,7 @@ class WalletWorkflowOrchestrator:
             logger.info("Upload cancelled")
             return False
         return True
+
     def _upload_csv_files(
         self,
         date_suffix: str,
