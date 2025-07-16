@@ -6,17 +6,31 @@ import logging
 import tempfile
 import os
 from pathlib import Path
+from dataclasses import dataclass
 import json
 import numpy as np
 import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
 
-
 # Local modules
 from sagemaker_wallets.wallet_modeler import WalletModeler
 import utils as u
 import sage_utils.config_validation as ucv
+
+@dataclass
+class UploadContext:
+    """
+    Holds configuration and metadata for S3 uploads of preprocessed training data.
+    """
+    bucket_name: str
+    base_folder: str
+    folder_prefix: str
+    sanitized_target: str
+    total_size_mb: float
+    dataset: str
+    overwrite_existing: bool
+
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -134,102 +148,30 @@ class WalletWorkflowOrchestrator:
             raise ValueError("No date suffixes available. Ensure load_training_data() completed "
                             "successfully.")
 
-        # Get sanitized target variable name from y_train
-        target_name = self.training_data['y_train'].columns[0]
-        sanitized_target = target_name.replace('|', '_').replace('/', '_')
+        # Initialize UploadContext for this upload operation
+        context = self._prepare_upload_context(preprocessed_data, overwrite_existing)
 
-        # Identify all S3 path names
-        bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
-
-        # Calculate total upload size for confirmation
-        total_size_mb = sum(
-            df.memory_usage(deep=True).sum() for df in preprocessed_data.values()
-            if isinstance(df, pd.DataFrame)
-        ) / (1024 * 1024) * len(self.date_suffixes)
-
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        logger.milestone(f"<{dataset.upper()}> Ready to upload {total_size_mb:.1f} MB of preprocessed training data "
-                    f"across {len(self.date_suffixes)} date folders.")
-        logger.info(f"Target variable: {sanitized_target}")
-        logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
-        confirmation = input("Proceed with upload? (y/N): ")
-
-        if confirmation.lower() != 'y':
-            logger.info("Upload cancelled")
+        # Confirm upload based on prepared context
+        if not self._confirm_upload(context):
             return {}
 
         s3_client = boto3.client('s3')
         upload_results = {}
 
         for date_suffix in self.date_suffixes:
-            date_uris = {}
+            # Upload CSV splits for this date
+            date_uris = self._upload_csv_files(date_suffix, preprocessed_data, context, s3_client)
 
-            for split_name, df in preprocessed_data.items():
-                # Skip metadata - only process DataFrame splits
-                if split_name == 'metadata':
-                    continue
-
-                # Enhanced filename with target variable
-                filename = f"{split_name}_{sanitized_target}.csv"
-                s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{filename}"
-                s3_uri = f"s3://{bucket_name}/{s3_key}"
-
-                # Check if file exists
-                if not overwrite_existing:
-                    try:
-                        s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                        logger.info(f"File {s3_key} already exists, skipping upload")
-                        date_uris[split_name] = s3_uri
-                        continue
-                    except ClientError:
-                        pass  # File doesn't exist, proceed with upload
-
-                # Validate CSV safety before upload
-                self._validate_csv_safety(df, split_name)
-
-                # Upload file
-                logger.info(f"Uploading {split_name}_{sanitized_target} for {date_suffix}: {df.shape[0]:,} rows")
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
-                    df.to_csv(temp_file.name, header=False, index=False)
-                    temp_file_path = temp_file.name
-
-                s3_client.upload_file(temp_file_path, bucket_name, s3_key)
-                os.unlink(temp_file_path)
-
-                date_uris[split_name] = s3_uri
-                logger.info(f"Uploaded {split_name} to {s3_uri}")
+            # Upload metadata for this date
+            metadata_uri = self._upload_metadata_for_date(
+                date_suffix,
+                preprocessed_data.get('metadata', {}),
+                context,
+                s3_client
+            )
+            date_uris['metadata'] = metadata_uri
 
             upload_results[date_suffix] = date_uris
-
-            # Upload metadata JSON for this date suffix
-            metadata_filename = f"metadata_{sanitized_target}.json"
-            metadata_s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{metadata_filename}"
-            metadata_s3_uri = f"s3://{bucket_name}/{metadata_s3_key}"
-
-            # Check if metadata file exists
-            if not overwrite_existing:
-                try:
-                    s3_client.head_object(Bucket=bucket_name, Key=metadata_s3_key)
-                    logger.info(f"Metadata file {metadata_s3_key} already exists, skipping upload")
-                except ClientError:
-                    # File doesn't exist, proceed with upload
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                        json.dump(preprocessed_data['metadata'], temp_file, indent=2)
-                        temp_metadata_path = temp_file.name
-
-                    s3_client.upload_file(temp_metadata_path, bucket_name, metadata_s3_key)
-                    os.unlink(temp_metadata_path)
-                    logger.info(f"Uploaded metadata to {metadata_s3_uri}")
-            else:
-                # Upload metadata (overwrite mode)
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                    json.dump(preprocessed_data['metadata'], temp_file, indent=2)
-                    temp_metadata_path = temp_file.name
-
-                s3_client.upload_file(temp_metadata_path, bucket_name, metadata_s3_key)
-                os.unlink(temp_metadata_path)
-                logger.info(f"Uploaded metadata to {metadata_s3_uri}")
 
         return upload_results
 
@@ -328,6 +270,52 @@ class WalletWorkflowOrchestrator:
     # ------------------------
     #      Helper Methods
     # ------------------------
+
+    def _prepare_upload_context(
+        self,
+        preprocessed_data: dict,
+        overwrite_existing: bool
+    ) -> UploadContext:
+        """
+        Prepare UploadContext with all S3 paths, size, and settings.
+
+        Params:
+        - preprocessed_data (dict): dict of DataFrames & metadata
+        - overwrite_existing (bool): whether to overwrite existing S3 objects
+
+        Returns:
+        - UploadContext: configured upload context
+        """
+        # Sanitize target variable name
+        target_name = self.training_data['y_train'].columns[0]
+        sanitized_target = target_name.replace('|', '_').replace('/', '_')
+
+        # Get S3 upload paths
+        bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
+
+        # Compute total upload size (MB)
+        total_size_mb = (
+            sum(
+                df.memory_usage(deep=True).sum()
+                for df in preprocessed_data.values()
+                if isinstance(df, pd.DataFrame)
+            )
+            / (1024 * 1024)
+            * len(self.date_suffixes)
+        )
+
+        # Determine dataset tag
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+
+        return UploadContext(
+            bucket_name=bucket_name,
+            base_folder=base_folder,
+            folder_prefix=folder_prefix,
+            sanitized_target=sanitized_target,
+            total_size_mb=total_size_mb,
+            dataset=dataset,
+            overwrite_existing=overwrite_existing
+        )
 
     def _load_single_date_data(self, date_suffix: str):
         """
@@ -450,3 +438,101 @@ class WalletWorkflowOrchestrator:
         folder_prefix = f"{upload_folder}/"
 
         return bucket_name, base_folder, folder_prefix
+
+    def _confirm_upload(self, context: UploadContext) -> bool:
+        """
+        Prompt user to confirm upload with summary logs.
+
+        Params:
+        - context (UploadContext): context containing paths and size
+
+        Returns:
+        - bool: True if user confirms, False otherwise
+        """
+        logger.milestone(
+            f"<{context.dataset.upper()}> Ready to upload "
+            f"{context.total_size_mb:.1f} MB of preprocessed training data "
+            f"across {len(self.date_suffixes)} date folders."
+        )
+        logger.info(f"Target variable: {context.sanitized_target}")
+        logger.info(
+            f"Target: s3://{context.bucket_name}/"
+            f"{context.base_folder}/{context.folder_prefix}[DATE]/"
+        )
+        confirmation = input("Proceed with upload? (y/N): ")
+        if confirmation.lower() != 'y':
+            logger.info("Upload cancelled")
+            return False
+        return True
+    def _upload_csv_files(
+        self,
+        date_suffix: str,
+        preprocessed_data: dict,
+        context: UploadContext,
+        s3_client
+    ) -> dict[str, str]:
+        """
+        Upload all DataFrame splits (excluding metadata) for one date to S3.
+        Returns a mapping of split_name to S3 URI.
+        """
+        date_uris: dict[str, str] = {}
+        for split_name, df in preprocessed_data.items():
+            if split_name == 'metadata':
+                continue
+
+            filename = f"{split_name}_{context.sanitized_target}.csv"
+            s3_key = f"{context.base_folder}/{context.folder_prefix}{date_suffix}/{filename}"
+            s3_uri = f"s3://{context.bucket_name}/{s3_key}"
+
+            if not context.overwrite_existing:
+                try:
+                    s3_client.head_object(Bucket=context.bucket_name, Key=s3_key)
+                    logger.info(f"File {s3_key} exists, skipping upload")
+                    date_uris[split_name] = s3_uri
+                    continue
+                except ClientError:
+                    pass  # Doesn't exist yet
+
+            self._validate_csv_safety(df, split_name)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+                df.to_csv(tmp.name, index=False, header=False)
+                temp_path = tmp.name
+
+            s3_client.upload_file(temp_path, context.bucket_name, s3_key)
+            os.unlink(temp_path)
+            logger.info(f"Uploaded {split_name} to {s3_uri}")
+            date_uris[split_name] = s3_uri
+
+        return date_uris
+
+    def _upload_metadata_for_date(
+        self,
+        date_suffix: str,
+        metadata: dict,
+        context: UploadContext,
+        s3_client
+    ) -> str:
+        """
+        Upload metadata JSON for one date to S3.
+        Returns the metadata file's S3 URI.
+        """
+        filename = f"metadata_{context.sanitized_target}.json"
+        s3_key = f"{context.base_folder}/{context.folder_prefix}{date_suffix}/{filename}"
+        s3_uri = f"s3://{context.bucket_name}/{s3_key}"
+
+        if not context.overwrite_existing:
+            try:
+                s3_client.head_object(Bucket=context.bucket_name, Key=s3_key)
+                logger.info(f"Metadata file {s3_key} exists, skipping upload")
+                return s3_uri
+            except ClientError:
+                pass  # Doesn't exist yet
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+            json.dump(metadata, tmp, indent=2)
+            temp_path = tmp.name
+
+        s3_client.upload_file(temp_path, context.bucket_name, s3_key)
+        os.unlink(temp_path)
+        logger.info(f"Uploaded metadata to {s3_uri}")
+        return s3_uri
