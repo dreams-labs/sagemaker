@@ -30,19 +30,24 @@ class WalletModeler:
     """
     Handles model training and prediction generation for wallet-coin performance modeling
     using SageMaker XGBoost with S3 data sources.
+
+    Manages SageMaker infrastructure configuration, hyperparameter settings, and
+    model artifacts for wallet performance prediction workflows.
     """
     def __init__(
             self,
             sage_wallets_config: Dict,
+            modeling_config: Dict,
             s3_uris: Dict[str, Dict[str, str]]
         ):
-        # Config
+        # Configs
         self.sage_wallets_config = sage_wallets_config
-        self.s3_uris = s3_uris
+        self.modeling_config = modeling_config
 
         # SageMaker setup
         self.sagemaker_session = sagemaker.Session()
         self.role = sage_wallets_config['aws']['modeler_arn']
+        self.s3_uris = s3_uris
 
         # Model artifacts
         self.model_uri = None
@@ -82,8 +87,7 @@ class WalletModeler:
         # Configure XGBoost estimator with basic hyperparameters
         xgb_container = sagemaker.image_uris.retrieve(
             framework='xgboost',
-            region=self.sagemaker_session.boto_region_name,
-            version='1.5-1'
+            region=self.sagemaker_session.boto_region_name
         )
 
         # Extract upload_folder from config for naming
@@ -131,7 +135,7 @@ class WalletModeler:
                 'max_depth': 6,
                 'eta': 0.3,
                 'subsample': 0.8,
-                'colsample_bytree': 0.8,
+                '_colsample_bytree': 0.8,
                 'early_stopping_rounds': 10
             },
             output_path=model_output_path
@@ -283,8 +287,7 @@ class WalletModeler:
         # Create model for batch transform
         xgb_container = sagemaker.image_uris.retrieve(
             framework='xgboost',
-            region=self.sagemaker_session.boto_region_name,
-            version='1.5-1'
+            region=self.sagemaker_session.boto_region_name
         )
 
         # Create model in SageMaker registry with deterministic naming
