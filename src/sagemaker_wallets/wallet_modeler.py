@@ -20,6 +20,7 @@ from sagemaker.transformer import Transformer
 
 # Local module imports
 from utils import ConfigError
+import sage_utils.config_validation as ucv
 
 
 # Set up logger at the module level
@@ -45,6 +46,8 @@ class WalletModeler:
             s3_uris: Dict[str, Dict[str, str]]
         ):
         # Configs
+        ucv.validate_sage_wallets_config(wallets_config)
+        ucv.validate_sage_wallets_modeling_config(modeling_config)
         self.wallets_config = wallets_config
         self.modeling_config = modeling_config
 

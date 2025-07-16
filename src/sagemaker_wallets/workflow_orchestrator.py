@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 # Local modules
 from sagemaker_wallets.wallet_modeler import WalletModeler
 import utils as u
+import sage_utils.config_validation as ucv
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -26,11 +27,13 @@ class WalletWorkflowOrchestrator:
      models for all provided dates.
 
     Params:
+    - wallets_config (dict): abbreviated name for sage_wallets_config.yaml
     """
-    def __init__(self, sage_wallets_config: dict):
+    def __init__(self, wallets_config: dict):
 
         # Config
-        self.sage_wallets_config = sage_wallets_config
+        ucv.validate_sage_wallets_config(wallets_config)
+        self.wallets_config = wallets_config
 
         # Training data variables
         self.training_data = None
@@ -50,7 +53,7 @@ class WalletWorkflowOrchestrator:
         """
         Load and combine training data across multiple prediction period dates.
 
-        Files are loaded from sage_wallets_config.training_data.local_load_folder.
+        Files are loaded from wallets_config.training_data.local_load_folder.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
@@ -71,8 +74,8 @@ class WalletWorkflowOrchestrator:
          world scenario.
         """
         # Data location validation with dataset suffix
-        load_folder = self.sage_wallets_config['training_data']['local_load_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        load_folder = self.wallets_config['training_data']['local_load_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             load_folder = f"{load_folder}_dev"
@@ -135,11 +138,11 @@ class WalletWorkflowOrchestrator:
         sanitized_target = target_name.replace('|', '_').replace('/', '_')
 
         s3_client = boto3.client('s3')
-        bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
+        bucket_name = self.wallets_config['aws']['training_bucket']
+        base_folder = self.wallets_config['aws']['preprocessed_folder']
 
-        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             upload_folder = f"{upload_folder}_dev"
@@ -218,11 +221,11 @@ class WalletWorkflowOrchestrator:
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
 
-        bucket_name = self.sage_wallets_config['aws']['training_bucket']
-        base_folder = self.sage_wallets_config['aws']['preprocessed_folder']
+        bucket_name = self.wallets_config['aws']['training_bucket']
+        base_folder = self.wallets_config['aws']['preprocessed_folder']
 
-        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             upload_folder = f"{upload_folder}_dev"
@@ -284,7 +287,7 @@ class WalletWorkflowOrchestrator:
         """
         Trains models for all configured scenarios.
         """
-        modeler = WalletModeler(self.sage_wallets_config, self.training_data)
+        modeler = WalletModeler(self.wallets_config, self.training_data)
 
 
     def run_scoring_pipeline(self):
