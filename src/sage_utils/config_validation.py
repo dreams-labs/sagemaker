@@ -16,7 +16,7 @@ def validate_sage_wallets_config(config: dict) -> None:
         ValueError if any validation rule fails.
     """
     upload_folder = config.get("training_data", {}).get("upload_folder", "")
-    _validate_upload_folder_length(upload_folder)
+    _validate_upload_folder_name(upload_folder)
 
 
 def validate_sage_wallets_modeling_config(modeling_config: dict) -> None:
@@ -47,7 +47,7 @@ def validate_sage_wallets_modeling_config(modeling_config: dict) -> None:
 #     Helper Functions
 # ------------------------
 
-def _validate_upload_folder_length(
+def _validate_upload_folder_name(
         upload_folder: str,
         max_len: int = 20
     ) -> None:
@@ -57,6 +57,10 @@ def _validate_upload_folder_length(
      and a limit of 25 ensures that the SageMaker CreateTrainingJob operation
      doesn't fail because of a job name that exceeds the hard cap of 64 characters.
     """
+    if '_' in upload_folder:
+        raise ConfigError(f"Invalid upload_folder value '{upload_folder} contains underscores. "
+                          "AWS syntax requires the use of hyphens instead of underscores.")
+
     if len(upload_folder) > max_len:
         raise ConfigError(
             f"'upload_folder' exceeds {max_len} characters (got {len(upload_folder)}): '{upload_folder}'"
