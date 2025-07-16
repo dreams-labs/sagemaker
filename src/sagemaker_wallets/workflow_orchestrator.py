@@ -6,6 +6,7 @@ import logging
 import tempfile
 import os
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 import boto3
@@ -137,22 +138,18 @@ class WalletWorkflowOrchestrator:
         target_name = self.training_data['y_train'].columns[0]
         sanitized_target = target_name.replace('|', '_').replace('/', '_')
 
-        s3_client = boto3.client('s3')
-        bucket_name = self.wallets_config['aws']['training_bucket']
-        base_folder = self.wallets_config['aws']['preprocessed_folder']
-
-        upload_folder = self.wallets_config['training_data']['upload_folder']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_folder = f"{upload_folder}_dev"
-
-        folder_prefix = f"{upload_folder}/"
+        # Identify all S3 path names
+        bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
 
         # Calculate total upload size for confirmation
-        total_files = len(self.date_suffixes) * len(preprocessed_data)
+        total_size_mb = sum(
+            df.memory_usage(deep=True).sum() for df in preprocessed_data.values()
+            if isinstance(df, pd.DataFrame)
+        ) / (1024 * 1024) * len(self.date_suffixes)
 
-        logger.info(f"<{dataset.upper()}> Ready to upload {total_files} preprocessed training data files "
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+
+        logger.milestone(f"<{dataset.upper()}> Ready to upload {total_size_mb:.1f} MB of preprocessed training data "
                     f"across {len(self.date_suffixes)} date folders.")
         logger.info(f"Target variable: {sanitized_target}")
         logger.info(f"Target: s3://{bucket_name}/{base_folder}/{folder_prefix}[DATE]/")
@@ -162,12 +159,17 @@ class WalletWorkflowOrchestrator:
             logger.info("Upload cancelled")
             return {}
 
+        s3_client = boto3.client('s3')
         upload_results = {}
 
         for date_suffix in self.date_suffixes:
             date_uris = {}
 
             for split_name, df in preprocessed_data.items():
+                # Skip metadata - only process DataFrame splits
+                if split_name == 'metadata':
+                    continue
+
                 # Enhanced filename with target variable
                 filename = f"{split_name}_{sanitized_target}.csv"
                 s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{filename}"
@@ -200,6 +202,35 @@ class WalletWorkflowOrchestrator:
 
             upload_results[date_suffix] = date_uris
 
+            # Upload metadata JSON for this date suffix
+            metadata_filename = f"metadata_{sanitized_target}.json"
+            metadata_s3_key = f"{base_folder}/{folder_prefix}{date_suffix}/{metadata_filename}"
+            metadata_s3_uri = f"s3://{bucket_name}/{metadata_s3_key}"
+
+            # Check if metadata file exists
+            if not overwrite_existing:
+                try:
+                    s3_client.head_object(Bucket=bucket_name, Key=metadata_s3_key)
+                    logger.info(f"Metadata file {metadata_s3_key} already exists, skipping upload")
+                except ClientError:
+                    # File doesn't exist, proceed with upload
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                        json.dump(preprocessed_data['metadata'], temp_file, indent=2)
+                        temp_metadata_path = temp_file.name
+
+                    s3_client.upload_file(temp_metadata_path, bucket_name, metadata_s3_key)
+                    os.unlink(temp_metadata_path)
+                    logger.info(f"Uploaded metadata to {metadata_s3_uri}")
+            else:
+                # Upload metadata (overwrite mode)
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                    json.dump(preprocessed_data['metadata'], temp_file, indent=2)
+                    temp_metadata_path = temp_file.name
+
+                s3_client.upload_file(temp_metadata_path, bucket_name, metadata_s3_key)
+                os.unlink(temp_metadata_path)
+                logger.info(f"Uploaded metadata to {metadata_s3_uri}")
+
         return upload_results
 
 
@@ -221,16 +252,8 @@ class WalletWorkflowOrchestrator:
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
 
-        bucket_name = self.wallets_config['aws']['training_bucket']
-        base_folder = self.wallets_config['aws']['preprocessed_folder']
-
-        upload_folder = self.wallets_config['training_data']['upload_folder']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_folder = f"{upload_folder}_dev"
-
-        folder_prefix = f"{upload_folder}/"
+        # Get S3 file locations
+        bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
 
         s3_client = boto3.client('s3')
         s3_uris = {}
@@ -406,3 +429,24 @@ class WalletWorkflowOrchestrator:
                 raise ValueError(
                     f"CSV-unsafe characters found in {split_name}.{col}: {problematic_values.iloc[0]}"
                 )
+
+
+    def _get_s3_upload_paths(self) -> tuple[str, str, str]:
+        """
+        Get S3 bucket, base folder, and upload folder prefix for training data.
+
+        Returns:
+        - tuple: (bucket_name, base_folder, folder_prefix)
+        """
+        bucket_name = self.wallets_config['aws']['training_bucket']
+        base_folder = self.wallets_config['aws']['preprocessed_folder']
+
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+
+        if dataset == 'dev':
+            upload_folder = f"{upload_folder}-dev"
+
+        folder_prefix = f"{upload_folder}/"
+
+        return bucket_name, base_folder, folder_prefix
