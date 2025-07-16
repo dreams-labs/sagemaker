@@ -19,8 +19,17 @@ class SageWalletsPreprocessor:
     - All numeric data types
     """
 
-    def __init__(self, sage_wallets_config: dict):
-        self.fill_na_config = sage_wallets_config['preprocessing']['fill_na']
+    def __init__(
+            self,
+            sage_wallets_config: dict
+        ):
+        self.wallets_config = sage_wallets_config
+        self.preprocessing_config = self.wallets_config['preprocessing']
+
+
+    # -------------------------
+    #     Primary Interface
+    # -------------------------
 
     def preprocess_training_data(self, training_data: dict) -> dict:
         """
@@ -77,7 +86,18 @@ class SageWalletsPreprocessor:
             logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows "
                         f"× {combined_data.shape[1]} cols.")
 
+        # Compile training metadata using x_train reference
+        processed_data['metadata'] = self._compile_training_metadata(training_data)
+
         return processed_data
+
+
+
+
+
+    # ------------------------
+    #     Helper Methods
+    # ------------------------
 
     def _preprocess_x_data(self, df: pd.DataFrame, split_name: str) -> pd.DataFrame:
         """
@@ -104,6 +124,7 @@ class SageWalletsPreprocessor:
 
         return df
 
+
     def _handle_missing_values(self, df: pd.DataFrame, split_name: str) -> pd.DataFrame:
         """
         Handle missing values using configured fill strategies.
@@ -129,7 +150,7 @@ class SageWalletsPreprocessor:
 
             # Check against configured prefixes
             fill_applied = False
-            for prefix, fill_value in self.fill_na_config.items():
+            for prefix, fill_value in self.preprocessing_config['fill_na'].items():
                 if col_for_matching.startswith(prefix):
                     if isinstance(fill_value, str):
                         # Apply aggregation function
@@ -166,6 +187,7 @@ class SageWalletsPreprocessor:
 
         return df
 
+
     def _validate_index_alignment(
             self,
             x_df: pd.DataFrame,
@@ -185,6 +207,7 @@ class SageWalletsPreprocessor:
 
         if not np.array_equal(x_df.index, y_df.index):
             raise ValueError(f"Index mismatch between X and y for {split_name}.")
+
 
     def _validate_x_column_consistency(
             self,
@@ -239,6 +262,7 @@ class SageWalletsPreprocessor:
 
                 raise ValueError(f"Column order mismatch in {split_name}: {mismatch_details}")
 
+
     def _combine_x_y_data(self, x_df: pd.DataFrame, y_df: pd.DataFrame) -> pd.DataFrame:
         """
         Combine X and y DataFrames with target variable as first column.
@@ -259,3 +283,28 @@ class SageWalletsPreprocessor:
         logger.info(f"Merged y df with target var {y_df.columns[0]} with X data.")
 
         return combined_df
+
+
+    def _compile_training_metadata(self, training_data: dict) -> dict:
+        """
+        Compile metadata about training configuration and feature columns.
+
+        Params:
+        - training_data (dict): Full training data dictionary with all splits
+
+        Returns:
+        - dict: Complete metadata including config and column information
+        """
+        x_train_df = training_data['x_train']
+        y_train_df = training_data['y_train']
+        target_column_name = y_train_df.columns[0]
+
+        metadata = {
+            'sage_wallets_config': self.wallets_config,
+            'feature_columns': x_train_df.columns.tolist(),
+            'feature_count': len(x_train_df.columns),
+            'target_variable': target_column_name,
+            'preprocessing_timestamp': pd.Timestamp.now().isoformat()
+        }
+
+        return metadata
