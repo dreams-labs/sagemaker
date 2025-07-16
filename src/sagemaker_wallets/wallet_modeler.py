@@ -2,7 +2,7 @@
 Class to manage all steps of the wallet model training and scoring.
 
 This class handles data that has already been feature engineered and uploaded to S3,
-indexed on a wallet-coin-offset_date tuple, with features already present as columns.
+ indexed on a wallet-coin-offset_date tuple, with features already present as columns.
 
 Interacts with:
 ---------------
@@ -20,6 +20,7 @@ from sagemaker.transformer import Transformer
 
 # Local module imports
 from utils import ConfigError
+import sage_utils.config_validation as ucv
 
 
 # Set up logger at the module level
@@ -29,20 +30,31 @@ logger = logging.getLogger(__name__)
 class WalletModeler:
     """
     Handles model training and prediction generation for wallet-coin performance modeling
-    using SageMaker XGBoost with S3 data sources.
+     using SageMaker with S3 data sources.
+
+    Manages SageMaker infrastructure configuration, hyperparameter settings, and
+     model artifacts for wallet performance prediction workflows.
+
+    Params:
+    - wallets_config (dict): abbreviated name for sage_wallets_config.yaml
+    - modeling_config (dict): abbreviated name for sage_wallets_modeling_config.yaml
     """
     def __init__(
             self,
-            sage_wallets_config: Dict,
+            wallets_config: Dict,
+            modeling_config: Dict,
             s3_uris: Dict[str, Dict[str, str]]
         ):
-        # Config
-        self.sage_wallets_config = sage_wallets_config
-        self.s3_uris = s3_uris
+        # Configs
+        ucv.validate_sage_wallets_config(wallets_config)
+        ucv.validate_sage_wallets_modeling_config(modeling_config)
+        self.wallets_config = wallets_config
+        self.modeling_config = modeling_config
 
         # SageMaker setup
         self.sagemaker_session = sagemaker.Session()
-        self.role = sage_wallets_config['aws']['modeler_arn']
+        self.role = wallets_config['aws']['modeler_arn']
+        self.s3_uris = s3_uris
 
         # Model artifacts
         self.model_uri = None
@@ -55,8 +67,8 @@ class WalletModeler:
 
     def train_model(self, date_suffix: str):
         """
-        Train XGBoost model using SageMaker's built-in XGBoost algorithm.
-        Uses train/test splits with eval for early stopping.
+        Train model using SageMaker's built-in algorithm.
+         Uses train/test splits with eval for early stopping.
 
         Params:
         - date_suffix (str): Specific date to train model for (required).
@@ -64,7 +76,7 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name
         """
-        logger.info("Starting SageMaker XGBoost training")
+        logger.info("Starting SageMaker training...")
 
         # Validate date suffix
         if date_suffix not in self.s3_uris:
@@ -79,27 +91,27 @@ class WalletModeler:
             if split not in date_uris:
                 raise ConfigError(f"{split.capitalize()} data URI not found for date {date_suffix}")
 
-        # Configure XGBoost estimator with basic hyperparameters
-        xgb_container = sagemaker.image_uris.retrieve(
-            framework='xgboost',
+        # Configure estimator with basic hyperparameters
+        model_container = sagemaker.image_uris.retrieve(
+            framework=self.modeling_config['framework']['name'],
             region=self.sagemaker_session.boto_region_name,
-            version='1.5-1'
+            version=self.modeling_config['framework']['version']
         )
 
         # Extract upload_folder from config for naming
-        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
-            upload_folder = f"{upload_folder}_dev"
+            upload_folder = f"{upload_folder}-dev"
 
         # Create descriptive model output path
-        model_output_path = (f"s3://{self.sage_wallets_config['aws']['training_bucket']}/"
+        model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
                              f"sagemaker-models/{upload_folder}/")
 
         # Check if model output path already exists
         s3_client = self.sagemaker_session.boto_session.client('s3')
-        bucket_name = self.sage_wallets_config['aws']['training_bucket']
+        bucket_name = self.wallets_config['aws']['training_bucket']
         prefix = f"sagemaker-models/{upload_folder}/"
 
         try:
@@ -120,20 +132,12 @@ class WalletModeler:
                 logger.warning(f"Unable to check existing models: {e}")
 
         xgb_estimator = Estimator(
-            image_uri=xgb_container,
-            instance_type='ml.m5.large',
-            instance_count=1,
+            image_uri=model_container,
+            instance_type=self.modeling_config['training']['instance_type'],
+            instance_count=self.modeling_config['training']['instance_count'],
             role=self.role,
             sagemaker_session=self.sagemaker_session,
-            hyperparameters={
-                'objective': 'reg:squarederror',
-                'num_round': 100,
-                'max_depth': 6,
-                'eta': 0.3,
-                'subsample': 0.8,
-                'colsample_bytree': 0.8,
-                'early_stopping_rounds': 10
-            },
+            hyperparameters=self.modeling_config['training']['hyperparameters'],
             output_path=model_output_path
         )
 
@@ -187,13 +191,13 @@ class WalletModeler:
         - dict: Contains model URI and training job name of most recent model
         """
         # Extract upload_folder from config
-        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
-            upload_folder = f"{upload_folder}_dev"
+            upload_folder = f"{upload_folder}-dev"
 
-        bucket_name = self.sage_wallets_config['aws']['training_bucket']
+        bucket_name = self.wallets_config['aws']['training_bucket']
         base_prefix = f"sagemaker-models/{upload_folder}/"
 
         # List all objects under the upload folder
@@ -282,14 +286,14 @@ class WalletModeler:
 
         # Create model for batch transform
         xgb_container = sagemaker.image_uris.retrieve(
-            framework='xgboost',
+            framework=self.modeling_config['framework']['name'],
             region=self.sagemaker_session.boto_region_name,
-            version='1.5-1'
+            version=self.modeling_config['framework']['version']
         )
 
         # Create model in SageMaker registry with deterministic naming
-        upload_folder = self.sage_wallets_config['training_data']['upload_folder']
-        dataset = self.sage_wallets_config['training_data'].get('dataset', 'prod')
+        upload_folder = self.wallets_config['training_data']['upload_folder']
+        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
             upload_folder = f"{upload_folder}_dev"
@@ -311,12 +315,12 @@ class WalletModeler:
         timestamp = datetime.now().strftime("%H%M%S")
         job_name = f"wallet-scoring-{date_suffix}-{timestamp}"
 
-        output_path = f"s3://{self.sage_wallets_config['aws']['training_bucket']}/validation-data-scored/"
+        output_path = f"s3://{self.wallets_config['aws']['training_bucket']}/validation-data-scored/"
 
         transformer = Transformer(
             model_name=model_name,
-            instance_count=1,
-            instance_type='ml.m5.large',
+            instance_count=self.modeling_config['predicting']['instance_count'],
+            instance_type=self.modeling_config['predicting']['instance_type'],
             output_path=output_path,
             sagemaker_session=self.sagemaker_session
         )

@@ -1,1 +1,22 @@
 #SageMaker Modeling Config
+framework:
+    name: xgboost
+    version: latest
+
+training:
+    instance_type: ml.m5.large
+    instance_count: 1
+
+    #KeyParam Hyperparameters
+    hyperparameters:
+        objective: reg:linear
+        num_round: 100
+        max_depth: 6
+        eta: 0.3
+        subsample: 0.8
+        colsample_bytree: 0.8
+        early_stopping_rounds: 10
+
+predicting:
+    instance_type: ml.m5.large
+    instance_count: 1
