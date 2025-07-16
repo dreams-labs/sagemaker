@@ -1,6 +1,7 @@
 #SageMaker Modeling Config
 framework:
     name: xgboost
+    version: latest
 
 training:
     instance_type: ml.m5.large
