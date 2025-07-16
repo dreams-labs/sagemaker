@@ -3,7 +3,7 @@
 training_data: #SageMaker
     local_load_folder: dda_897_td_column_ordering_v1  # where to load local csvs from
     upload_folder: dda-897  # new S3 folder name in bucket training_data_processed
-    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
+    dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
 preprocessing: #SageMaker
     fill_na:
