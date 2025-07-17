@@ -77,6 +77,13 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
+        # Validate date_suffix format
+        try:
+            datetime.strptime(date_suffix, "%Y%m%d")
+        except ValueError as exc:
+            raise ValueError(f"Invalid date_suffix format: {date_suffix}. "
+                             "Expected 'YYYYMMDD'.") from exc
+
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
         base_upload_folder = wallets_config['training_data']['upload_folder']
@@ -449,11 +456,19 @@ class WalletModeler:
         Send a feature-only DataFrame to the deployed SageMaker endpoint for prediction.
 
         Params:
-        - df (DataFrame): Preprocessed DataFrame with no target column, no headers, and correct column order.
+        - df (DataFrame): Preprocessed DataFrame with no target column, no headers, and
+            correct column order.
 
         Returns:
         - np.ndarray: Model predictions.
         """
+        # Null check
+        if df.empty:
+            raise ValueError("Input DataFrame cannot be empty.")
+        if df.isnull().values.any():
+            raise ValueError("Input DataFrame contains null values, which are not allowed "
+                             "for predictions with SageMaker.")
+
         if not self.endpoint_name:
             # Use helper to find existing endpoint if possible
             endpoint = self._find_existing_endpoint()
@@ -502,7 +517,12 @@ class WalletModeler:
             else:
                 raise ValueError(f"Unexpected prediction format from endpoint: {preds[0]}")
 
-        return np.array(predictions)
+        result_array = np.array(predictions)
+
+        # Save predictions using helper
+        self._save_endpoint_predictions(predictions)
+
+        return result_array
 
 
     # -------------------------------
@@ -648,3 +668,18 @@ class WalletModeler:
             return None
         else:
             return None
+
+
+    def _save_endpoint_predictions(self, predictions: list) -> None:
+        """
+        Save endpoint predictions to a CSV file in the configured endpoint_preds_dir.
+        """
+        output_dir = Path(self.modeling_config["metaparams"]["endpoint_preds_dir"])
+        if not output_dir.parent.exists():
+            raise FileNotFoundError(f"Required directory '{output_dir.parent}/' not found.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        output_file = output_dir / f"endpoint_predictions_{local_dir}_{self.date_suffix}.csv"
+        pd.DataFrame(predictions, columns=["score"]).to_csv(output_file, index=False)
+        logger.info(f"Predictions saved to {output_file}")
