@@ -58,8 +58,8 @@ def validate_sage_wallets_config(config: dict) -> SageWalletsConfig:
         validated_config = SageWalletsConfig(**config)
 
         # Then apply custom business logic validation
-        upload_folder = config.get("training_data", {}).get("upload_folder", "")
-        _validate_upload_folder_name(upload_folder)
+        upload_directory = config.get("training_data", {}).get("upload_directory", "")
+        _validate_upload_directory_name(upload_directory)
 
         return validated_config
 
@@ -95,21 +95,21 @@ def validate_sage_wallets_modeling_config(modeling_config: dict) -> None:
 #     Helper Functions
 # ------------------------
 
-def _validate_upload_folder_name(
-        upload_folder: str,
+def _validate_upload_directory_name(
+        upload_directory: str,
         max_len: int = 20
     ) -> None:
     """
-    Validates that the upload_folder string doesn't exceed 25 characters. This
+    Validates that the upload_directory string doesn't exceed 25 characters. This
      param flows through as a filename component throughout the modeling process
      and a limit of 25 ensures that the SageMaker CreateTrainingJob operation
      doesn't fail because of a job name that exceeds the hard cap of 64 characters.
     """
-    if '_' in upload_folder:
-        raise ConfigError(f"Invalid upload_folder value '{upload_folder} contains underscores. "
+    if '_' in upload_directory:
+        raise ConfigError(f"Invalid upload_directory value '{upload_directory} contains underscores. "
                           "AWS syntax requires the use of hyphens instead of underscores.")
 
-    if len(upload_folder) > max_len:
+    if len(upload_directory) > max_len:
         raise ConfigError(
-            f"'upload_folder' exceeds {max_len} characters (got {len(upload_folder)}): '{upload_folder}'"
+            f"'upload_directory' exceeds {max_len} characters (got {len(upload_directory)}): '{upload_directory}'"
         )
