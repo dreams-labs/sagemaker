@@ -49,9 +49,9 @@ class WalletModeler:
         each date_suffix, formatted as:
             {date_suffix}:
                 train: {uri}
-                test: {uri}
-                eval: {uri}
-                val: {uri}
+                test:  {uri}
+                eval:  {uri}
+                val:   {uri}
     """
     def __init__(
             self,
@@ -287,7 +287,7 @@ class WalletModeler:
         }
 
 
-    def predict_with_cloud_model(self):
+    def predict_with_batch_transform(self):
         """
         Score validation data using trained model via SageMaker batch transform.
 
