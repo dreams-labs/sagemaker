@@ -455,17 +455,24 @@ class WalletModeler:
 
 
 
-    def predict_using_endpoint(self, df: pd.DataFrame) -> np.ndarray:
+    def predict_using_endpoint(self, df: pd.DataFrame, df_type: str) -> np.ndarray:
         """
         Send a feature-only DataFrame to the deployed SageMaker endpoint for prediction.
 
         Params:
         - df (DataFrame): Preprocessed DataFrame with no target column, no headers, and
             correct column order.
+        - df_type (str): Indicates which dataset the predictions were generated from
+            (e.g., 'val' or 'test'). Used in the output filename as y_pred_{df_type}.
 
         Returns:
         - np.ndarray: Model predictions.
+        Raises:
+        - ValueError: If df_type is not 'val' or 'test'.
         """
+        # Validate df_type
+        if df_type not in ('val', 'test'):
+            raise ValueError(f"Invalid df_type: {df_type}. Must be 'val' or 'test'.")
         # Null check
         if df.empty:
             raise ValueError("Input DataFrame cannot be empty.")
@@ -528,7 +535,7 @@ class WalletModeler:
         result_array = np.array(predictions)
 
         # Save predictions using helper
-        self._save_endpoint_predictions(predictions)
+        self._save_endpoint_predictions(predictions, df_type)
 
         logger.info("Endpoint predictions completed successfully.")
         u.notify('mellow_chime_005')
@@ -680,9 +687,14 @@ class WalletModeler:
             return None
 
 
-    def _save_endpoint_predictions(self, predictions: list) -> None:
+    def _save_endpoint_predictions(self, predictions: list, df_type: str) -> None:
         """
         Save endpoint predictions to a CSV file in the configured endpoint_preds_dir.
+
+        Params:
+        - predictions (list): List of prediction scores.
+        - df_type (str): Indicates which dataset the predictions were generated from
+            (e.g., 'val' or 'test'). Used in the output filename as y_pred_{df_type}.
         """
         output_dir = Path(self.modeling_config["metaparams"]["endpoint_preds_dir"])
         if not output_dir.parent.exists():
@@ -690,7 +702,8 @@ class WalletModeler:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         local_dir = self.wallets_config["training_data"]["local_directory"]
-        output_file = output_dir / f"endpoint_predictions_{local_dir}_{self.date_suffix}.csv"
+        output_file = (output_dir /
+                       f"endpoint_y_pred_{df_type}_{local_dir}_{self.date_suffix}.csv")
         pd.DataFrame(predictions, columns=["score"]).to_csv(output_file, index=False)
         logger.info(f"Predictions saved to {output_file}")
 
