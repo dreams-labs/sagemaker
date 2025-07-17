@@ -14,7 +14,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # Local modules
-from sagemaker_wallets.wallet_modeler import WalletModeler
+from sage_wallet_modeling.wallet_modeler import WalletModeler
 import utils as u
 import sage_utils.config_validation as ucv
 

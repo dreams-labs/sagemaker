@@ -14,7 +14,7 @@ class NoExtrasBaseModel(BaseModel):
     }
 
 # ============================================================================
-#          sagemaker_wallets_modeling_config.yaml Main Configuration
+#          sage_wallet_modeling_modeling_config.yaml Main Configuration
 # ============================================================================
 
 class SageWalletsModelingConfig(NoExtrasBaseModel):
