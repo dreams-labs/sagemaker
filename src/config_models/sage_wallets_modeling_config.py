@@ -2,9 +2,7 @@
 Validation logic for items in sagemaker_modeling_config.yaml
 """
 from enum import Enum
-from typing import Optional, List, Dict
-from typing_extensions import Annotated
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Custom base model to disable extra fields in all sections
@@ -53,27 +51,51 @@ class MetaparamsConfig(BaseModel):
     """
     Configuration for metaparameters.
     """
-    pass  # Placeholder for future validation
+    endpoint_preds_dir: str = Field(...)
+
+    @field_validator('endpoint_preds_dir')
+    @classmethod
+    def validate_endpoint_preds_dir(cls, v):
+        """
+        Validates that the endpoint_preds_dir string doesn't include hyphens.
+        """
+        if '-' in v:
+            raise ValueError(f"Invalid endpoint_preds_dir value '{v}' contains hyphens. "
+                              "Local folders should use underscores instead of hyphens.")
+
 
 
 # Training section
 # ----------------
 
-class TrainingConfig(BaseModel):
+class InstanceType(str, Enum):
+    """Supported AWS instance types."""
+    ML_M5_LARGE = "ml.m5.large"
+
+class TrainingConfig(NoExtrasBaseModel):
     """
     Configuration for training settings.
     """
-    pass  # Placeholder for future validation
+    instance_type: InstanceType = Field(...)
+    instance_count: int = Field(...)
+    hyperparameters: dict = Field(...)
 
 
 # Predicting section
 # ------------------
 
-class PredictingConfig(BaseModel):
+class PredictMethod(str, Enum):
+    """Supported prediction methods."""
+    ENDPOINT = "endpoint"
+    BATCH_TRANSFORM = "batch_transform"
+
+class PredictingConfig(NoExtrasBaseModel):
     """
     Configuration for prediction settings.
     """
-    pass  # Placeholder for future validation
+    instance_type: InstanceType = Field(...)
+    instance_count: int = Field(...)
+    predict_method: PredictMethod = Field(...)
 
 
 # ============================================================================

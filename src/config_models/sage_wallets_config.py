@@ -35,6 +35,33 @@ class TrainingDataConfig(BaseModel):
     local_directory: str = Field(...)
     upload_directory: str = Field(...)
 
+    @field_validator('local_directory')
+    @classmethod
+    def validate_local_directory(cls, v):
+        """
+        Validates that the local_directory string doesn't include hyphens.
+        """
+        if '-' in v:
+            raise ValueError(f"Invalid local_directory value '{v}' contains hyphens. "
+                              "Local folders should use underscores instead of hyphens.")
+
+    @field_validator('upload_directory')
+    @classmethod
+    def validate_upload_directory(cls, v):
+        """
+        Validates that the upload_directory string doesn't exceed 20 characters. This
+        param flows through as a filename component throughout the modeling process
+        and a limit of 20 ensures that the SageMaker CreateTrainingJob operation
+        doesn't fail because of a job name that exceeds the hard cap of 64 characters.
+        """
+        if '_' in v:
+            raise ValueError(f"Invalid upload_directory value '{v}' contains underscores. "
+                              "AWS syntax requires the use of hyphens instead of underscores.")
+
+        if len(v) > 20:
+            raise ValueError(f"'upload_directory' exceeds 20 characters (got {len(v)}): '{v}'")
+
+        return v
 
 
 
