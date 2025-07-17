@@ -438,28 +438,3 @@ class WalletModeler:
         logger.info(f"Model ready at: {model_path}")
 
         return model_path
-
-
-    def predict_with_local_model(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        Params:
-        - df (DataFrame): Validation data for scoring
-
-        Returns:
-        - ndarray: Model predictions
-        """
-        # get the downloaded model file
-        model_path = self.download_existing_model()
-        if not Path(model_path).exists():
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-
-        # load the raw Booster in one shot
-        logger.info(f"Loading Booster from {model_path}")
-        booster = xgb.Booster(model_file=model_path)
-
-        # vectorized predict via DMatrix
-        logger.info(f"Running predictions on {df.shape[0]:,} rows")
-        preds = booster.predict(xgb.DMatrix(df))
-
-        logger.info(f"Done: {len(preds):,} predictions")
-        return preds
