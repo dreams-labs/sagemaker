@@ -1,6 +1,9 @@
 # utilities/config_validation.py
 
+import yaml
+
 # Local module imports
+from config_models.sage_wallets_config import SageWalletsConfig
 from utils import ConfigError
 
 
@@ -9,14 +12,59 @@ from utils import ConfigError
 #     Primary Interface
 # -------------------------
 
-def validate_sage_wallets_config(config: dict) -> None:
+
+def load_sage_wallets_config(config_path: str) -> dict:
     """
-    Validate key parameters in the sage_wallets_config dictionary.
+    Load and validate SageMaker configuration from YAML file.
+
+    Params:
+    - config_path (str): Path to the sagemaker_config.yaml file
+
+    Returns:
+    - dict: Validated configuration dictionary
+
     Raises:
-        ValueError if any validation rule fails.
+    - ConfigError: If file loading or validation fails
     """
-    upload_folder = config.get("training_data", {}).get("upload_folder", "")
-    _validate_upload_folder_name(upload_folder)
+    try:
+        with open(config_path, 'r', encoding='utf-8') as file:
+            raw_config = yaml.safe_load(file)
+
+        return validate_sage_wallets_config(raw_config)
+
+    except FileNotFoundError as e:
+        raise ConfigError(f"Configuration file not found: {config_path}") from e
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Invalid YAML format: {str(e)}") from e
+    except Exception as e:
+        raise ConfigError(f"Configuration validation failed: {str(e)}") from e
+
+
+def validate_sage_wallets_config(config: dict) -> SageWalletsConfig:
+    """
+    Validate key parameters in the sage_wallets_config dictionary using pydantic.
+
+    Params:
+    - config (dict): Raw configuration dictionary from YAML
+
+    Returns:
+    - SageWalletsConfig: Validated pydantic configuration object
+
+    Raises:
+    - ConfigError: If any validation rule fails
+    """
+    try:
+        # First apply pydantic validation
+        validated_config = SageWalletsConfig(**config)
+
+        # Then apply custom business logic validation
+        upload_folder = config.get("training_data", {}).get("upload_folder", "")
+        _validate_upload_folder_name(upload_folder)
+
+        return validated_config
+
+    except Exception as e:
+        raise ConfigError(f"Configuration validation failed: {str(e)}") from e
 
 
 def validate_sage_wallets_modeling_config(modeling_config: dict) -> None:
