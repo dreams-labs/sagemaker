@@ -13,7 +13,6 @@ class NoExtrasBaseModel(BaseModel):
     model_config = {
         "extra": "forbid",  # Prevent extra fields that are not defined
         "str_max_length": 2000,    # Increase the max length of error message string representations
-        "protected_namespaces": ()  # Ignores protected spaces for params starting with  "model_"
     }
 
 # ============================================================================
@@ -31,17 +30,26 @@ class SageWalletsModelingConfig(NoExtrasBaseModel):
 # Framework section
 # -----------------
 
-class FrameworkConfig(NoExtrasBaseModel):
+class FrameworkName(str, Enum):
+    """Supported ML framework names."""
+    XGBOOST = "xgboost"
+
+class FrameworkVersion(str, Enum):
+    """Supported framework versions."""
+    XGBOOST_1_7_1 = "1.7-1"
+
+class FrameworkConfig(BaseModel):
     """
     Configuration for ML framework settings.
     """
-    pass  # Placeholder for future validation
+    name: FrameworkName = Field(...)
+    version: FrameworkVersion = Field(...)
 
 
 # Metaparams section
 # ------------------
 
-class MetaparamsConfig(NoExtrasBaseModel):
+class MetaparamsConfig(BaseModel):
     """
     Configuration for metaparameters.
     """
@@ -51,7 +59,7 @@ class MetaparamsConfig(NoExtrasBaseModel):
 # Training section
 # ----------------
 
-class TrainingConfig(NoExtrasBaseModel):
+class TrainingConfig(BaseModel):
     """
     Configuration for training settings.
     """
@@ -61,7 +69,7 @@ class TrainingConfig(NoExtrasBaseModel):
 # Predicting section
 # ------------------
 
-class PredictingConfig(NoExtrasBaseModel):
+class PredictingConfig(BaseModel):
     """
     Configuration for prediction settings.
     """
