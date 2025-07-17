@@ -13,6 +13,8 @@ from typing import Dict,Optional
 from datetime import datetime
 import tarfile
 from pathlib import Path
+import numpy as np
+import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
 import sagemaker
@@ -20,6 +22,9 @@ from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model import Model
 from sagemaker.transformer import Transformer
+from sagemaker.predictor import Predictor
+from sagemaker.serializers import CSVSerializer
+from sagemaker.deserializers import JSONDeserializer
 
 # Local module imports
 from utils import ConfigError
@@ -437,9 +442,77 @@ class WalletModeler:
 
         return model_path
 
+
+
+    def predict_using_endpoint(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Send a feature-only DataFrame to the deployed SageMaker endpoint for prediction.
+
+        Params:
+        - df (DataFrame): Preprocessed DataFrame with no target column, no headers, and correct column order.
+
+        Returns:
+        - np.ndarray: Model predictions.
+        """
+        if not self.endpoint_name:
+            # Use helper to find existing endpoint if possible
+            endpoint = self._find_existing_endpoint()
+            if endpoint:
+                self.endpoint_name = endpoint
+                logger.info(f"Using detected endpoint: {self.endpoint_name}")
+            else:
+                raise ValueError("No endpoint deployed and none matched by prefix. "
+                                 "Call deploy_endpoint() first.")
+
+        # Estimate average row size
+        sample_csv = df.head(100).to_csv(index=False, header=False).encode("utf-8")
+        avg_row_size = max(1, len(sample_csv) // 100)
+
+        # Set payload size limit - the hard cap is 6MB
+        max_payload_bytes = 6 * 1024 * 1024
+        # Set chunk size to this % of the hard cap
+        buffer_ratio = 0.85
+        rows_per_chunk = max(1, (max_payload_bytes * (buffer_ratio)) // avg_row_size)
+
+        # Request confirmation based on total payload size and rows
+        estimated_total_bytes = len(df) * avg_row_size
+        estimated_total_mb = estimated_total_bytes / (1024 * 1024)
+        total_chunks = max(1, len(df) // rows_per_chunk)
+        logger.info(f"Prediction preview: {len(df)} rows across {total_chunks} chunks "
+              f"({estimated_total_mb:.2f}MB estimated total size)")
+        confirmation = input("Proceed with prediction? (y/N): ")
+        if confirmation.lower() != 'y':
+            logger.info("Prediction cancelled by user")
+            return np.array([])
+
+        predictor = Predictor(
+            endpoint_name=self.endpoint_name,
+            sagemaker_session=self.sagemaker_session,
+            serializer=CSVSerializer(),
+            deserializer=JSONDeserializer()
+        )
+
+        # Chunk and predict
+        predictions = []
+        for chunk in np.array_split(df, max(1, len(df) // rows_per_chunk)):
+            payload = chunk.to_csv(index=False, header=False)
+            preds = predictor.predict(payload)
+            if isinstance(preds, dict) and 'predictions' in preds:
+                predictions.extend([row['score'] for row in preds['predictions']])
+            else:
+                raise ValueError(f"Unexpected prediction format from endpoint: {preds[0]}")
+
+        return np.array(predictions)
+
+
+    # -------------------------------
+    #    Endpoint Utility Methods
+    # -------------------------------
+
     def deploy_endpoint(self) -> str:
         """
-        Deploy the trained model to a SageMaker real-time endpoint with a deterministic name.
+        Deploy the trained model to a SageMaker real-time endpoint with a deterministic name
+         and timestamp.
 
         Returns:
         - endpoint_name (str): The name of the deployed endpoint.
@@ -448,6 +521,20 @@ class WalletModeler:
             raise ValueError("No model URI available. Call train_model() or "
                              "load_existing_model() first.")
 
+        # Check for existing endpoint with matching prefix
+        existing_endpoint = self._find_existing_endpoint()
+        if existing_endpoint:
+            logger.warning("An existing active endpoint matches the deployment prefix: "
+                           f"{existing_endpoint}")
+            confirmation = input(
+                f"Endpoint '{existing_endpoint}' already exists. "
+                "Deploy a new endpoint anyway? (y/N): "
+            )
+            if confirmation.lower() != 'y':
+                logger.info("Deployment cancelled by user; using existing endpoint.")
+                self.endpoint_name = existing_endpoint
+                return existing_endpoint
+
         # Retrieve the image URI for the model
         image_uri = sagemaker.image_uris.retrieve(
             framework=self.modeling_config['framework']['name'],
@@ -455,8 +542,20 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        # Generate deterministic endpoint name
-        endpoint_name = f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
+        # Generate endpoint name with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        endpoint_name = (f"{self.modeling_config['framework']['name']}-"
+                         f"{self.upload_folder}-"
+                         f"{timestamp}")
+
+        # Check for active endpoints to avoid orphaned resources
+        active_endpoints = self.list_active_endpoints()
+        if len(active_endpoints) > 1:
+            logger.warning(f"{len(active_endpoints)} active endpoints detected: {active_endpoints}")
+        all_endpoints = self.list_all_endpoints()
+        if len(all_endpoints) > 10:
+            logger.warning(f"Found {all_endpoints} total endpoints. Consider cleaning "
+                           "up old endpoints.")
 
         # Create the model object
         model = Model(
@@ -495,6 +594,20 @@ class WalletModeler:
         return active_endpoints
 
 
+    def list_all_endpoints(self) -> list:
+        """
+        List all SageMaker endpoints (active and inactive).
+
+        Returns:
+        - list: All endpoint names.
+        """
+        paginator = self.sagemaker_session.sagemaker_client.get_paginator('list_endpoints')
+        all_endpoints = []
+        for page in paginator.paginate():
+            all_endpoints.extend(ep['EndpointName'] for ep in page['Endpoints'])
+        return all_endpoints
+
+
     def delete_endpoint(self, endpoint_name: str):
         """
         Delete a specific SageMaker endpoint by name.
@@ -518,3 +631,20 @@ class WalletModeler:
         for endpoint_name in endpoints:
             self.delete_endpoint(endpoint_name)
 
+
+    def _find_existing_endpoint(self) -> Optional[str]:
+        """
+        Search for an existing endpoint matching the expected prefix.
+        Returns:
+            str: endpoint name if exactly one match, None if no matches or multiple matches.
+        """
+        prefix = f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
+        candidates = self.list_active_endpoints()
+        matching = [ep for ep in candidates if ep.startswith(prefix)]
+        if len(matching) == 1:
+            return matching[0]
+        elif len(matching) > 1:
+            logger.warning(f"Multiple active endpoints match prefix '{prefix}': {matching}")
+            return None
+        else:
+            return None
