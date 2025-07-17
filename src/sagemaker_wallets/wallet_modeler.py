@@ -170,6 +170,7 @@ class WalletModeler:
             )
 
             if 'Contents' in response:
+                u.notify('alert_mellow_positive')
                 confirmation = input(f"Model {model_output_path} already exists. "
                                      "Overwrite existing model? (y/N): ")
                 if confirmation.lower() != 'y':
@@ -498,6 +499,8 @@ class WalletModeler:
         total_chunks = max(1, len(df) // rows_per_chunk)
         logger.info(f"Prediction preview: {len(df)} rows across {total_chunks} chunks "
               f"({estimated_total_mb:.2f}MB estimated total size)")
+
+        u.notify('alert_mellow_positive')
         confirmation = input("Proceed with prediction? (y/N): ")
         if confirmation.lower() != 'y':
             logger.info("Prediction cancelled by user")
@@ -554,6 +557,7 @@ class WalletModeler:
         if existing_endpoint:
             logger.warning("An existing active endpoint matches the deployment prefix: "
                            f"{existing_endpoint}")
+            u.notify('alert_mellow_positive')
             confirmation = input(
                 f"Endpoint '{existing_endpoint}' already exists. "
                 "Deploy a new endpoint anyway? (y/N): "
