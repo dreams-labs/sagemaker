@@ -18,5 +18,5 @@ preprocessing: #SageMaker
 
 aws: #SageMaker
     training_bucket: wallet-training-data
-    preprocessed_folder: training-data-preprocessed
+    preprocessed_directory: training-data-preprocessed
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner

@@ -11,8 +11,7 @@ class NoExtrasBaseModel(BaseModel):
     """Custom BaseModel to apply config settings globally."""
     model_config = {
         "extra": "forbid",  # Prevent extra fields that are not defined
-        "str_max_length": 2000,    # Increase the max length of error message string representations
-        "protected_namespaces": ()  # Ignores protected spaces for params starting with  "model_"
+        "str_max_length": 2000,    # Increase the max length of error message string representation
     }
 
 # ============================================================================
@@ -33,7 +32,10 @@ class TrainingDataConfig(BaseModel):
     """
     Configuration for training data settings.
     """
-    pass  # Placeholder for future validation
+    local_directory: str = Field(...)
+    upload_directory: str = Field(...)
+
+
 
 
 # Preprocessing section
@@ -71,11 +73,13 @@ class PreprocessingConfig(NoExtrasBaseModel):
 # AWS section
 # -----------
 
-class AWSConfig(BaseModel):
+class AWSConfig(NoExtrasBaseModel):
     """
     Configuration for AWS settings.
     """
-    pass  # Placeholder for future validation
+    training_bucket: str = Field(...)
+    preprocessed_directory: str = Field(...)
+    modeler_arn: str = Field(...)
 
 
 # ============================================================================

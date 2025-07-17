@@ -40,7 +40,7 @@ def load_sage_wallets_config(config_path: str) -> dict:
         raise ConfigError(f"Configuration validation failed: {str(e)}") from e
 
 
-def validate_sage_wallets_config(config: dict) -> SageWalletsConfig:
+def validate_sage_wallets_config(config: dict) -> dict:
     """
     Validate key parameters in the sage_wallets_config dictionary using pydantic.
 
@@ -48,20 +48,17 @@ def validate_sage_wallets_config(config: dict) -> SageWalletsConfig:
     - config (dict): Raw configuration dictionary from YAML
 
     Returns:
-    - SageWalletsConfig: Validated pydantic configuration object
+    - dict: Validated configuration dictionary
 
     Raises:
     - ConfigError: If any validation rule fails
     """
     try:
-        # First apply pydantic validation
-        validated_config = SageWalletsConfig(**config)
+        # Apply pydantic validation
+        _ = SageWalletsConfig(**config)
 
-        # Then apply custom business logic validation
-        upload_directory = config.get("training_data", {}).get("upload_directory", "")
-        _validate_upload_directory_name(upload_directory)
-
-        return validated_config
+        # Return original dict after validation passes
+        return config
 
     except Exception as e:
         raise ConfigError(f"Configuration validation failed: {str(e)}") from e
@@ -88,28 +85,3 @@ def validate_sage_wallets_modeling_config(modeling_config: dict) -> None:
     if framework['name'] != 'xgboost':
         raise ConfigError(f"Unsupported framework: {framework['name']}. "
                          "Only 'xgboost' is currently supported")
-
-
-
-# ------------------------
-#     Helper Functions
-# ------------------------
-
-def _validate_upload_directory_name(
-        upload_directory: str,
-        max_len: int = 20
-    ) -> None:
-    """
-    Validates that the upload_directory string doesn't exceed 25 characters. This
-     param flows through as a filename component throughout the modeling process
-     and a limit of 25 ensures that the SageMaker CreateTrainingJob operation
-     doesn't fail because of a job name that exceeds the hard cap of 64 characters.
-    """
-    if '_' in upload_directory:
-        raise ConfigError(f"Invalid upload_directory value '{upload_directory} contains underscores. "
-                          "AWS syntax requires the use of hyphens instead of underscores.")
-
-    if len(upload_directory) > max_len:
-        raise ConfigError(
-            f"'upload_directory' exceeds {max_len} characters (got {len(upload_directory)}): '{upload_directory}'"
-        )
