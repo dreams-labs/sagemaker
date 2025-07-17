@@ -68,7 +68,7 @@ class WalletWorkflowOrchestrator:
         """
         Load and combine training data across multiple prediction period dates.
 
-        Files are loaded from wallets_config.training_data.local_load_folder.
+        Files are loaded from wallets_config.training_data.local_directory.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
@@ -89,7 +89,7 @@ class WalletWorkflowOrchestrator:
          world scenario.
         """
         # Data location validation with dataset suffix
-        load_folder = self.wallets_config['training_data']['local_load_folder']
+        load_folder = self.wallets_config['training_data']['local_directory']
         dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
