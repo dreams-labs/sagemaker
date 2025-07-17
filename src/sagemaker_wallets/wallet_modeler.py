@@ -9,13 +9,12 @@ Interacts with:
 WalletWorkflowOrchestrator: uses this class for model construction
 """
 import logging
-from typing import Dict
+from typing import Dict,Optional
 from datetime import datetime
 import tarfile
 from pathlib import Path
-import pickle
-import pandas as pd
 import numpy as np
+import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
 import sagemaker
@@ -23,9 +22,12 @@ from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model import Model
 from sagemaker.transformer import Transformer
-import xgboost as xgb
+from sagemaker.predictor import Predictor
+from sagemaker.serializers import CSVSerializer
+from sagemaker.deserializers import JSONDeserializer
 
 # Local module imports
+import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
 
@@ -53,9 +55,9 @@ class WalletModeler:
         each date_suffix, formatted as:
             {date_suffix}:
                 train: {uri}
-                test: {uri}
-                eval: {uri}
-                val: {uri}
+                test:  {uri}
+                eval:  {uri}
+                val:   {uri}
     """
     def __init__(
             self,
@@ -76,6 +78,13 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
+        # Validate date_suffix format
+        try:
+            datetime.strptime(date_suffix, "%y%m%d")
+        except ValueError as exc:
+            raise ValueError(f"Invalid date_suffix format: {date_suffix}. "
+                             "Expected 'YYMMDD'.") from exc
+
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
         base_upload_folder = wallets_config['training_data']['upload_folder']
@@ -86,6 +95,8 @@ class WalletModeler:
         # Model artifacts
         self.model_uri = None
         self.predictions_uri = None
+        self.endpoint_name: Optional[str] = None
+        self.predictor: Optional[sagemaker.predictor.Predictor] = None
 
 
     # ------------------------
@@ -100,8 +111,6 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name
         """
-        logger.info("Starting SageMaker training...")
-
 
         # Validate URIs
         if not self.s3_uris:
@@ -119,6 +128,9 @@ class WalletModeler:
             if split not in date_uris:
                 raise ConfigError(f"{split.capitalize()} data URI not found for date "
                                   f"{self.date_suffix}")
+
+        logger.info("Starting SageMaker training...")
+        u.notify('logo_sci_fi_warm_swell')
 
         # Configure estimator with basic hyperparameters
         model_container = sagemaker.image_uris.retrieve(
@@ -158,6 +170,7 @@ class WalletModeler:
             )
 
             if 'Contents' in response:
+                u.notify('alert_mellow_positive')
                 confirmation = input(f"Model {model_output_path} already exists. "
                                      "Overwrite existing model? (y/N): ")
                 if confirmation.lower() != 'y':
@@ -208,6 +221,7 @@ class WalletModeler:
         self.model_uri = xgb_estimator.model_data
 
         logger.info(f"Training completed. Model stored at: {self.model_uri}")
+        u.notify('mellow_chime_005')
 
         return {
             'model_uri': self.model_uri,
@@ -291,7 +305,7 @@ class WalletModeler:
         }
 
 
-    def predict_with_cloud_model(self):
+    def predict_with_batch_transform(self):
         """
         Score validation data using trained model via SageMaker batch transform.
 
@@ -438,3 +452,251 @@ class WalletModeler:
         logger.info(f"Model ready at: {model_path}")
 
         return model_path
+
+
+
+    def predict_using_endpoint(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Send a feature-only DataFrame to the deployed SageMaker endpoint for prediction.
+
+        Params:
+        - df (DataFrame): Preprocessed DataFrame with no target column, no headers, and
+            correct column order.
+
+        Returns:
+        - np.ndarray: Model predictions.
+        """
+        # Null check
+        if df.empty:
+            raise ValueError("Input DataFrame cannot be empty.")
+        if df.isnull().values.any():
+            raise ValueError("Input DataFrame contains null values, which are not allowed "
+                             "for predictions with SageMaker.")
+
+        if not self.endpoint_name:
+            # Use helper to find existing endpoint if possible
+            endpoint = self._find_existing_endpoint()
+            if endpoint:
+                self.endpoint_name = endpoint
+                logger.info(f"Using detected endpoint: {self.endpoint_name}")
+            else:
+                raise ValueError("No endpoint deployed and none matched by prefix. "
+                                 "Call deploy_endpoint() first.")
+
+        # Estimate average row size
+        sample_csv = df.head(100).to_csv(index=False, header=False).encode("utf-8")
+        avg_row_size = max(1, len(sample_csv) // 100)
+
+        # Set payload size limit - the hard cap is 6MB
+        max_payload_bytes = 6 * 1024 * 1024
+        # Set chunk size to this % of the hard cap
+        buffer_ratio = 0.85
+        rows_per_chunk = max(1, (max_payload_bytes * (buffer_ratio)) // avg_row_size)
+
+        # Request confirmation based on total payload size and rows
+        estimated_total_bytes = len(df) * avg_row_size
+        estimated_total_mb = estimated_total_bytes / (1024 * 1024)
+        total_chunks = max(1, len(df) // rows_per_chunk)
+        logger.info(f"Prediction preview: {len(df)} rows across {total_chunks} chunks "
+              f"({estimated_total_mb:.2f}MB estimated total size)")
+
+        u.notify('alert_mellow_positive')
+        confirmation = input("Proceed with prediction? (y/N): ")
+        if confirmation.lower() != 'y':
+            logger.info("Prediction cancelled by user")
+            return np.array([])
+
+        logger.info(f"Beginning endpoint predictions for {total_chunks} chunks...")
+        u.notify('logo_corporate_warm_swell')
+        predictor = Predictor(
+            endpoint_name=self.endpoint_name,
+            sagemaker_session=self.sagemaker_session,
+            serializer=CSVSerializer(),
+            deserializer=JSONDeserializer()
+        )
+
+        # Chunk and predict
+        predictions = []
+        for chunk in np.array_split(df, max(1, len(df) // rows_per_chunk)):
+            payload = chunk.to_csv(index=False, header=False)
+            preds = predictor.predict(payload)
+            if isinstance(preds, dict) and 'predictions' in preds:
+                predictions.extend([row['score'] for row in preds['predictions']])
+            else:
+                raise ValueError(f"Unexpected prediction format from endpoint: {preds[0]}")
+
+        result_array = np.array(predictions)
+
+        # Save predictions using helper
+        self._save_endpoint_predictions(predictions)
+
+        logger.info("Endpoint predictions completed successfully.")
+        u.notify('mellow_chime_005')
+
+        return result_array
+
+
+    # -------------------------------
+    #    Endpoint Utility Methods
+    # -------------------------------
+
+    def deploy_endpoint(self) -> str:
+        """
+        Deploy the trained model to a SageMaker real-time endpoint with a deterministic name
+         and timestamp.
+
+        Returns:
+        - endpoint_name (str): The name of the deployed endpoint.
+        """
+        if not self.model_uri:
+            raise ValueError("No model URI available. Call train_model() or "
+                             "load_existing_model() first.")
+
+        # Check for existing endpoint with matching prefix
+        existing_endpoint = self._find_existing_endpoint()
+        if existing_endpoint:
+            logger.warning("An existing active endpoint matches the deployment prefix: "
+                           f"{existing_endpoint}")
+            u.notify('alert_mellow_positive')
+            confirmation = input(
+                f"Endpoint '{existing_endpoint}' already exists. "
+                "Deploy a new endpoint anyway? (y/N): "
+            )
+            if confirmation.lower() != 'y':
+                logger.info("Deployment cancelled by user; using existing endpoint.")
+                self.endpoint_name = existing_endpoint
+                return existing_endpoint
+
+        # Retrieve the image URI for the model
+        image_uri = sagemaker.image_uris.retrieve(
+            framework=self.modeling_config['framework']['name'],
+            region=self.sagemaker_session.boto_region_name,
+            version=self.modeling_config['framework']['version']
+        )
+
+        # Generate endpoint name with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        endpoint_name = f"{self._get_endpoint_prefix()}-{timestamp}"
+
+        # Check for active endpoints to avoid orphaned resources
+        active_endpoints = self.list_active_endpoints()
+        if len(active_endpoints) > 1:
+            logger.warning(f"{len(active_endpoints)} active endpoints detected: {active_endpoints}")
+        all_endpoints = self.list_all_endpoints()
+        if len(all_endpoints) > 10:
+            logger.warning(f"Found {all_endpoints} total endpoints. Consider cleaning "
+                           "up old endpoints.")
+
+        # Create the model object
+        model = Model(
+            image_uri=image_uri,
+            model_data=self.model_uri,
+            role=self.role,
+            sagemaker_session=self.sagemaker_session
+        )
+
+        # Deploy the model to a real-time endpoint
+        logger.info(f"Deploying real-time endpoint: {endpoint_name}...")
+        predictor = model.deploy(
+            initial_instance_count=self.modeling_config['predicting']['instance_count'],
+            instance_type=self.modeling_config['predicting']['instance_type'],
+            endpoint_name=endpoint_name
+        )
+
+        # Store state
+        self.endpoint_name = endpoint_name
+        self.predictor = predictor
+
+        logger.info(f"Endpoint deployed: {self.endpoint_name}.")
+        return self.endpoint_name
+
+
+    def list_active_endpoints(self) -> list:
+        """
+        List currently active SageMaker endpoints.
+
+        Returns:
+        - list: Names of all active endpoints.
+        """
+        response = self.sagemaker_session.sagemaker_client.list_endpoints()
+        active_endpoints = [ep['EndpointName'] for ep in response['Endpoints']]
+        logger.info(f"Active endpoints: {active_endpoints}")
+        return active_endpoints
+
+
+    def list_all_endpoints(self) -> list:
+        """
+        List all SageMaker endpoints (active and inactive).
+
+        Returns:
+        - list: All endpoint names.
+        """
+        paginator = self.sagemaker_session.sagemaker_client.get_paginator('list_endpoints')
+        all_endpoints = []
+        for page in paginator.paginate():
+            all_endpoints.extend(ep['EndpointName'] for ep in page['Endpoints'])
+        return all_endpoints
+
+
+    def delete_endpoint(self, endpoint_name: str):
+        """
+        Delete a specific SageMaker endpoint by name.
+
+        Params:
+        - endpoint_name (str): Name of the endpoint to delete.
+        """
+        try:
+            logger.info(f"Deleting endpoint: {endpoint_name}")
+            self.sagemaker_session.sagemaker_client.delete_endpoint(EndpointName=endpoint_name)
+            logger.info(f"Successfully deleted endpoint: {endpoint_name}")
+        except ClientError as e:
+            logger.warning(f"Failed to delete endpoint {endpoint_name}: {e}")
+
+
+    def delete_all_endpoints(self):
+        """
+        Delete all active SageMaker endpoints.
+        """
+        endpoints = self.list_active_endpoints()
+        for endpoint_name in endpoints:
+            self.delete_endpoint(endpoint_name)
+
+
+    def _find_existing_endpoint(self) -> Optional[str]:
+        """
+        Search for an existing endpoint matching the expected prefix.
+        Returns:
+            str: endpoint name if exactly one match, None if no matches or multiple matches.
+        """
+        prefix = self._get_endpoint_prefix()
+        candidates = self.list_active_endpoints()
+        matching = [ep for ep in candidates if ep.startswith(prefix)]
+        if len(matching) == 1:
+            return matching[0]
+        elif len(matching) > 1:
+            logger.warning(f"Multiple active endpoints match prefix '{prefix}': {matching}")
+            return None
+        else:
+            return None
+
+
+    def _save_endpoint_predictions(self, predictions: list) -> None:
+        """
+        Save endpoint predictions to a CSV file in the configured endpoint_preds_dir.
+        """
+        output_dir = Path(self.modeling_config["metaparams"]["endpoint_preds_dir"])
+        if not output_dir.parent.exists():
+            raise FileNotFoundError(f"Required directory '{output_dir.parent}/' not found.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        output_file = output_dir / f"endpoint_predictions_{local_dir}_{self.date_suffix}.csv"
+        pd.DataFrame(predictions, columns=["score"]).to_csv(output_file, index=False)
+        logger.info(f"Predictions saved to {output_file}")
+
+
+    def _get_endpoint_prefix(self) -> str:
+        """
+        Generate deterministic endpoint name prefix based on framework and upload folder.
+        """
+        return f"{self.modeling_config['framework']['name']}-{self.upload_folder}"

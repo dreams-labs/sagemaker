@@ -4,7 +4,6 @@ training_data: #SageMaker
     local_directory: dda_897_td_column_ordering_v1  # where to load local csvs from
     upload_folder: dda-897  # new S3 folder name in bucket training_data_processed
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
-    predict_location: local  # set to 'local' or 'AWS' to determine whether to download a model and predict locally vs predict in the cloud and download scores
 
 preprocessing: #SageMaker
     fill_na:
