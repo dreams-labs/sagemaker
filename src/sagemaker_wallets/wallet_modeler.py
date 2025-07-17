@@ -9,7 +9,7 @@ Interacts with:
 WalletWorkflowOrchestrator: uses this class for model construction
 """
 import logging
-from typing import Dict
+from typing import Dict,Optional
 from datetime import datetime
 import tarfile
 from pathlib import Path
@@ -82,6 +82,8 @@ class WalletModeler:
         # Model artifacts
         self.model_uri = None
         self.predictions_uri = None
+        self.endpoint_name: Optional[str] = None
+        self.predictor: Optional[sagemaker.predictor.Predictor] = None
 
 
     # ------------------------
@@ -434,3 +436,85 @@ class WalletModeler:
         logger.info(f"Model ready at: {model_path}")
 
         return model_path
+
+    def deploy_endpoint(self) -> str:
+        """
+        Deploy the trained model to a SageMaker real-time endpoint with a deterministic name.
+
+        Returns:
+        - endpoint_name (str): The name of the deployed endpoint.
+        """
+        if not self.model_uri:
+            raise ValueError("No model URI available. Call train_model() or "
+                             "load_existing_model() first.")
+
+        # Retrieve the image URI for the model
+        image_uri = sagemaker.image_uris.retrieve(
+            framework=self.modeling_config['framework']['name'],
+            region=self.sagemaker_session.boto_region_name,
+            version=self.modeling_config['framework']['version']
+        )
+
+        # Generate deterministic endpoint name
+        endpoint_name = f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
+
+        # Create the model object
+        model = Model(
+            image_uri=image_uri,
+            model_data=self.model_uri,
+            role=self.role,
+            sagemaker_session=self.sagemaker_session
+        )
+
+        # Deploy the model to a real-time endpoint
+        logger.info(f"Deploying real-time endpoint: {endpoint_name}...")
+        predictor = model.deploy(
+            initial_instance_count=self.modeling_config['predicting']['instance_count'],
+            instance_type=self.modeling_config['predicting']['instance_type'],
+            endpoint_name=endpoint_name
+        )
+
+        # Store state
+        self.endpoint_name = endpoint_name
+        self.predictor = predictor
+
+        logger.info(f"Endpoint deployed: {self.endpoint_name}.")
+        return self.endpoint_name
+
+
+    def list_active_endpoints(self) -> list:
+        """
+        List currently active SageMaker endpoints.
+
+        Returns:
+        - list: Names of all active endpoints.
+        """
+        response = self.sagemaker_session.sagemaker_client.list_endpoints()
+        active_endpoints = [ep['EndpointName'] for ep in response['Endpoints']]
+        logger.info(f"Active endpoints: {active_endpoints}")
+        return active_endpoints
+
+
+    def delete_endpoint(self, endpoint_name: str):
+        """
+        Delete a specific SageMaker endpoint by name.
+
+        Params:
+        - endpoint_name (str): Name of the endpoint to delete.
+        """
+        try:
+            logger.info(f"Deleting endpoint: {endpoint_name}")
+            self.sagemaker_session.sagemaker_client.delete_endpoint(EndpointName=endpoint_name)
+            logger.info(f"Successfully deleted endpoint: {endpoint_name}")
+        except ClientError as e:
+            logger.warning(f"Failed to delete endpoint {endpoint_name}: {e}")
+
+
+    def delete_all_endpoints(self):
+        """
+        Delete all active SageMaker endpoints.
+        """
+        endpoints = self.list_active_endpoints()
+        for endpoint_name in endpoints:
+            self.delete_endpoint(endpoint_name)
+
