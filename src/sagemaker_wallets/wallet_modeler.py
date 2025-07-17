@@ -87,10 +87,10 @@ class WalletModeler:
 
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
-        base_upload_folder = wallets_config['training_data']['upload_folder']
+        base_upload_directory = wallets_config['training_data']['upload_directory']
         if self.dataset == 'dev':
-            base_upload_folder = f"{base_upload_folder}-dev"
-        self.upload_folder = base_upload_folder
+            base_upload_directory = f"{base_upload_directory}-dev"
+        self.upload_directory = base_upload_directory
 
         # Model artifacts
         self.model_uri = None
@@ -155,12 +155,12 @@ class WalletModeler:
 
         # Create descriptive model output path
         model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
-                             f"sagemaker-models/{self.upload_folder}/")
+                             f"sagemaker-models/{self.upload_directory}/")
 
         # Check if model output path already exists
         s3_client = self.sagemaker_session.boto_session.client('s3')
         bucket_name = self.wallets_config['aws']['training_bucket']
-        prefix = f"sagemaker-models/{self.upload_folder}/"
+        prefix = f"sagemaker-models/{self.upload_directory}/"
 
         try:
             response = s3_client.list_objects_v2(
@@ -203,7 +203,7 @@ class WalletModeler:
 
         # Launch training job with descriptive name
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        job_name = f"wallet-xgb-{self.upload_folder}-{self.date_suffix}-{timestamp}"
+        job_name = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-{timestamp}"
 
         logger.info(f"Launching training job: {job_name}")
         logger.info(f"Model output path: {model_output_path}")
@@ -238,7 +238,7 @@ class WalletModeler:
         - dict: Contains model URI and training job name of most recent model
         """
         bucket_name = self.wallets_config['aws']['training_bucket']
-        base_prefix = f"sagemaker-models/{self.upload_folder}/"
+        base_prefix = f"sagemaker-models/{self.upload_directory}/"
 
         # List all objects under the upload folder
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -259,7 +259,7 @@ class WalletModeler:
             raise FileNotFoundError(f"No models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
-        job_name_pattern = f"wallet-xgb-{self.upload_folder}-{self.date_suffix}-"
+        job_name_pattern = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-"
         matching_folders = []
 
         for prefix_info in response['CommonPrefixes']:
@@ -272,7 +272,7 @@ class WalletModeler:
                 matching_folders.append((timestamp_part, folder_name, folder_path))
 
         if not matching_folders:
-            raise FileNotFoundError(f"No models found for upload_folder '{self.upload_folder}' "
+            raise FileNotFoundError(f"No models found for upload_directory '{self.upload_directory}' "
                                     f"and date_suffix '{self.date_suffix}' "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
@@ -333,7 +333,7 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        model_name = f"wallet-model-{self.upload_folder}"
+        model_name = f"wallet-model-{self.upload_directory}"
 
         model = Model(
             image_uri=xgb_container,
@@ -699,4 +699,4 @@ class WalletModeler:
         """
         Generate deterministic endpoint name prefix based on framework and upload folder.
         """
-        return f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
+        return f"{self.modeling_config['framework']['name']}-{self.upload_directory}"

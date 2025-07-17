@@ -23,4 +23,4 @@ training:
 predicting:
     instance_type: ml.m5.large
     instance_count: 1
-    predict_method: endpoint  # endpoint, batch_transform, or local
+    predict_method: endpoint  # endpoint or batch_transform

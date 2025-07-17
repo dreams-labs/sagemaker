@@ -428,15 +428,15 @@ class WalletWorkflowOrchestrator:
         - tuple: (bucket_name, base_folder, folder_prefix)
         """
         bucket_name = self.wallets_config['aws']['training_bucket']
-        base_folder = self.wallets_config['aws']['preprocessed_folder']
+        base_folder = self.wallets_config['aws']['preprocessed_directory']
 
-        upload_folder = self.wallets_config['training_data']['upload_folder']
+        upload_directory = self.wallets_config['training_data']['upload_directory']
         dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
-            upload_folder = f"{upload_folder}-dev"
+            upload_directory = f"{upload_directory}-dev"
 
-        folder_prefix = f"{upload_folder}/"
+        folder_prefix = f"{upload_directory}/"
 
         return bucket_name, base_folder, folder_prefix
 
