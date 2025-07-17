@@ -12,14 +12,18 @@ import logging
 from typing import Dict
 from datetime import datetime
 import tarfile
-import boto3
 from pathlib import Path
+import pickle
+import pandas as pd
+import numpy as np
+import boto3
 from botocore.exceptions import ClientError
 import sagemaker
 from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model import Model
 from sagemaker.transformer import Transformer
+import xgboost as xgb
 
 # Local module imports
 from utils import ConfigError
@@ -45,13 +49,20 @@ class WalletModeler:
     - modeling_config (dict): abbreviated name for sage_wallets_modeling_config.yaml
     - date_suffix (str): the modeling_period_start of the training data with which to
         build the model.
+    - s3_uris (dict): dict containing S3 URIs locating the training data CSV files for
+        each date_suffix, formatted as:
+            {date_suffix}:
+                train: {uri}
+                test: {uri}
+                eval: {uri}
+                val: {uri}
     """
     def __init__(
             self,
             wallets_config: Dict,
             modeling_config: Dict,
-            s3_uris: Dict[str, Dict[str, str]],
-            date_suffix: str
+            date_suffix: str,
+            s3_uris: Dict[str, Dict[str, str]] = None
         ):
         # Configs
         ucv.validate_sage_wallets_config(wallets_config)
@@ -91,10 +102,14 @@ class WalletModeler:
         """
         logger.info("Starting SageMaker training...")
 
-        # Validate date suffix
+
+        # Validate URIs
+        if not self.s3_uris:
+            raise ConfigError("s3_uris required for cloud training")
         if self.date_suffix not in self.s3_uris:
             available_dates = list(self.s3_uris.keys())
-            raise ConfigError(f"Date suffix '{self.date_suffix}' not found in S3 URIs. Available: {available_dates}")
+            raise ConfigError(f"Date suffix '{self.date_suffix}' not found in S3 URIs. "
+                              f"Available: {available_dates}")
 
         date_uris = self.s3_uris[self.date_suffix]
 
@@ -102,7 +117,8 @@ class WalletModeler:
         required_splits = ['train', 'eval']
         for split in required_splits:
             if split not in date_uris:
-                raise ConfigError(f"{split.capitalize()} data URI not found for date {self.date_suffix}")
+                raise ConfigError(f"{split.capitalize()} data URI not found for date "
+                                  f"{self.date_suffix}")
 
         # Configure estimator with basic hyperparameters
         model_container = sagemaker.image_uris.retrieve(
@@ -110,6 +126,20 @@ class WalletModeler:
             region=self.sagemaker_session.boto_region_name,
             version=self.modeling_config['framework']['version']
         )
+
+        # Log version info and other metadata
+        logger.info(f"SageMaker XGBoost container: {model_container}")
+
+        # Extract version from container URI for cleaner logging
+        container_parts = model_container.split('/')[-1].split(':')
+        if len(container_parts) > 1:
+            container_version = container_parts[-1]
+            logger.info(f"Container version tag: {container_version}")
+
+        # Log the framework version from config for comparison
+        config_version = self.modeling_config['framework']['version']
+        logger.info(f"Requested framework version: {config_version}")
+
 
         # Create descriptive model output path
         model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
@@ -244,7 +274,8 @@ class WalletModeler:
             s3_client.head_object(Bucket=bucket_name, Key=model_s3_key)
         except ClientError as e:
             if e.response['Error']['Code'] == '404':
-                raise FileNotFoundError(f"Model file not found at expected location: {model_uri}") from e
+                raise FileNotFoundError("Model file not found at expected location: "
+                                        f"{model_uri}") from e
             else:
                 raise ValueError(f"Unable to access model file at {model_uri}: {e}") from e
 
@@ -268,7 +299,8 @@ class WalletModeler:
         - dict: Contains transform job name and output S3 URI
         """
         if not self.model_uri:
-            raise ValueError("No trained model available. Call train_model() or load_existing_model() first.")
+            raise ValueError("No trained model available. Call train_model() or "
+                             "load_existing_model() first.")
 
         # Use date_suffix from instance variable
         if not self.s3_uris:
@@ -353,7 +385,8 @@ class WalletModeler:
         - FileNotFoundError: If model artifacts not found at S3 location
         """
         if not self.model_uri:
-            raise ValueError("No model URI available. Call train_model() or load_existing_model() first.")
+            raise ValueError("No model URI available. Call train_model() or "
+                             "load_existing_model() first.")
 
         # Parse S3 URI
         if not self.model_uri.startswith('s3://'):
@@ -364,7 +397,7 @@ class WalletModeler:
         s3_key = uri_parts[1]
 
         # Create models directory matching training data structure
-        load_folder = self.wallets_config['training_data']['local_load_folder']
+        load_folder = self.wallets_config['training_data']['local_directory']
         dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         if dataset == 'dev':
@@ -405,3 +438,28 @@ class WalletModeler:
         logger.info(f"Model ready at: {model_path}")
 
         return model_path
+
+
+    def predict_with_local_model(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Params:
+        - df (DataFrame): Validation data for scoring
+
+        Returns:
+        - ndarray: Model predictions
+        """
+        # get the downloaded model file
+        model_path = self.download_existing_model()
+        if not Path(model_path).exists():
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+
+        # load the raw Booster in one shot
+        logger.info(f"Loading Booster from {model_path}")
+        booster = xgb.Booster(model_file=model_path)
+
+        # vectorized predict via DMatrix
+        logger.info(f"Running predictions on {df.shape[0]:,} rows")
+        preds = booster.predict(xgb.DMatrix(df))
+
+        logger.info(f"Done: {len(preds):,} predictions")
+        return preds
