@@ -92,6 +92,18 @@ class SageWalletsPreprocessor:
         return processed_data
 
 
+    def preprocess_x_df(self, x_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Preprocess a standalone feature DataFrame for inference.
+
+        Params:
+        - x_df (DataFrame): Feature-only DataFrame
+        - split_name (str): Used for logging and error messages
+
+        Returns:
+        - DataFrame: Preprocessed features
+        """
+        return self._preprocess_x_data(x_df, split_name="foo")
 
 
 
