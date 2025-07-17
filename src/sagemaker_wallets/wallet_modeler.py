@@ -564,9 +564,7 @@ class WalletModeler:
 
         # Generate endpoint name with timestamp
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        endpoint_name = (f"{self.modeling_config['framework']['name']}-"
-                         f"{self.upload_folder}-"
-                         f"{timestamp}")
+        endpoint_name = f"{self._get_endpoint_prefix()}-{timestamp}"
 
         # Check for active endpoints to avoid orphaned resources
         active_endpoints = self.list_active_endpoints()
@@ -658,7 +656,7 @@ class WalletModeler:
         Returns:
             str: endpoint name if exactly one match, None if no matches or multiple matches.
         """
-        prefix = f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
+        prefix = self._get_endpoint_prefix()
         candidates = self.list_active_endpoints()
         matching = [ep for ep in candidates if ep.startswith(prefix)]
         if len(matching) == 1:
@@ -683,3 +681,10 @@ class WalletModeler:
         output_file = output_dir / f"endpoint_predictions_{local_dir}_{self.date_suffix}.csv"
         pd.DataFrame(predictions, columns=["score"]).to_csv(output_file, index=False)
         logger.info(f"Predictions saved to {output_file}")
+
+
+    def _get_endpoint_prefix(self) -> str:
+        """
+        Generate deterministic endpoint name prefix based on framework and upload folder.
+        """
+        return f"{self.modeling_config['framework']['name']}-{self.upload_folder}"
