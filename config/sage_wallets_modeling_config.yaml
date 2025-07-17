@@ -3,6 +3,9 @@ framework:
     name: xgboost
     version: 1.7-1
 
+metaparams:
+    endpoint_preds_dir: temp/endpoint_predictions
+
 training:
     instance_type: ml.m5.large
     instance_count: 1
@@ -20,3 +23,4 @@ training:
 predicting:
     instance_type: ml.m5.large
     instance_count: 1
+    predict_method: endpoint  # endpoint, batch_transform, or local
