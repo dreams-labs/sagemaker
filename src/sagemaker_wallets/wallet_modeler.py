@@ -27,6 +27,7 @@ from sagemaker.serializers import CSVSerializer
 from sagemaker.deserializers import JSONDeserializer
 
 # Local module imports
+import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
 
@@ -79,10 +80,10 @@ class WalletModeler:
 
         # Validate date_suffix format
         try:
-            datetime.strptime(date_suffix, "%Y%m%d")
+            datetime.strptime(date_suffix, "%y%m%d")
         except ValueError as exc:
             raise ValueError(f"Invalid date_suffix format: {date_suffix}. "
-                             "Expected 'YYYYMMDD'.") from exc
+                             "Expected 'YYMMDD'.") from exc
 
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
@@ -110,8 +111,6 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name
         """
-        logger.info("Starting SageMaker training...")
-
 
         # Validate URIs
         if not self.s3_uris:
@@ -129,6 +128,9 @@ class WalletModeler:
             if split not in date_uris:
                 raise ConfigError(f"{split.capitalize()} data URI not found for date "
                                   f"{self.date_suffix}")
+
+        logger.info("Starting SageMaker training...")
+        u.notify('logo_sci_fi_warm_swell')
 
         # Configure estimator with basic hyperparameters
         model_container = sagemaker.image_uris.retrieve(
@@ -218,6 +220,7 @@ class WalletModeler:
         self.model_uri = xgb_estimator.model_data
 
         logger.info(f"Training completed. Model stored at: {self.model_uri}")
+        u.notify('mellow_chime_005')
 
         return {
             'model_uri': self.model_uri,
@@ -500,6 +503,8 @@ class WalletModeler:
             logger.info("Prediction cancelled by user")
             return np.array([])
 
+        logger.info(f"Beginning endpoint predictions for {total_chunks} chunks...")
+        u.notify('logo_corporate_warm_swell')
         predictor = Predictor(
             endpoint_name=self.endpoint_name,
             sagemaker_session=self.sagemaker_session,
@@ -521,6 +526,9 @@ class WalletModeler:
 
         # Save predictions using helper
         self._save_endpoint_predictions(predictions)
+
+        logger.info("Endpoint predictions completed successfully.")
+        u.notify('mellow_chime_005')
 
         return result_array
 
