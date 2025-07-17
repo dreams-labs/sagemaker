@@ -13,9 +13,6 @@ from typing import Dict
 from datetime import datetime
 import tarfile
 from pathlib import Path
-import pickle
-import pandas as pd
-import numpy as np
 import boto3
 from botocore.exceptions import ClientError
 import sagemaker
@@ -23,7 +20,6 @@ from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model import Model
 from sagemaker.transformer import Transformer
-import xgboost as xgb
 
 # Local module imports
 from utils import ConfigError
