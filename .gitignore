@@ -10,6 +10,9 @@ src/utils.py
 # ignore everything in loading queue
 s3_uploads/*
 
+# don't upload the actual models
+models/*
+
 # notebook accessory folders
 notebooks/archived/*
 notebooks/temp/*
