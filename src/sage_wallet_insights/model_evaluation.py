@@ -8,6 +8,8 @@ sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.model_evaluation as wime
 
 
+# pylint:disable=invalid-name  # X isn't lowercase
+
 def load_sagemaker_predictions(
     data_type: str,
     sage_wallets_config: dict,
@@ -114,6 +116,7 @@ def create_sagemaker_evaluator(
     y_train = pd.read_parquet(training_data_path / f"y_train_{date_suffix}.parquet")
     X_test = pd.read_parquet(training_data_path / f"x_test_{date_suffix}.parquet")
     X_val = pd.read_parquet(training_data_path / f"x_val_{date_suffix}.parquet")
+    y_val = pd.read_parquet(training_data_path / f"y_val_{date_suffix}.parquet")
 
     # Identify target variable and model type
     target_variable = y_val_true_series.name or y_train.columns[0]
@@ -156,7 +159,7 @@ def create_sagemaker_evaluator(
         'X_validation': X_val,
         'y_validation': y_val_true_series,
         'y_validation_pred': y_val_pred_series,
-        'validation_target_vars_df': None,
+        'validation_target_vars_df': y_val,
 
         # Mock pipeline
         'pipeline': create_mock_pipeline(objective)
