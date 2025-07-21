@@ -14,6 +14,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # Local modules
+from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
 from sage_wallet_modeling.wallet_modeler import WalletModeler
 import utils as u
 import sage_utils.config_validation as ucv
@@ -134,6 +135,54 @@ class WalletWorkflowOrchestrator:
         for date_suffix, date_data in training_data_by_date.items():
             date_rows = sum(df.shape[0] for df in date_data.values())
             logger.debug(f"  {date_suffix}: {date_rows:,} rows across {len(date_data)} splits")
+
+
+    def preprocess_all_training_data(self):
+        """
+        Preprocess training data for all loaded date suffixes independently.
+
+        Each date suffix gets its own preprocessing run to maintain temporal
+        boundaries and avoid data leakage between modeling periods.
+
+        Returns:
+        - dict: Preprocessed data keyed by date suffix
+        {
+            "250301": {train, test, eval, val, metadata},
+            "250401": {train, test, eval, val, metadata}
+        }
+
+        Raises:
+        - ValueError: If training_data not loaded or preprocessor unavailable
+        """
+        if not self.training_data:
+            raise ValueError("No training data loaded. Call load_all_training_data() first.")
+
+        preprocessed_by_date = {}
+
+        logger.info(f"Preprocessing {len(self.training_data)} date periods...")
+
+        for date_suffix, date_data in self.training_data.items():
+            logger.debug(f"Preprocessing data for {date_suffix}...")
+
+            # Initialize preprocessor for this date
+            preprocessor = SageWalletsPreprocessor(self.wallets_config)
+
+            # Preprocess this date's data
+            preprocessed_data = preprocessor.preprocess_training_data(date_data, date_suffix)
+
+            # Store results
+            preprocessed_by_date[date_suffix] = preprocessed_data
+
+            # Log preprocessing results
+            total_rows = sum(
+                df.shape[0] for df in preprocessed_data.values()
+                if isinstance(df, pd.DataFrame)
+            )
+            logger.debug(f"  {date_suffix}: {total_rows:,} preprocessed rows")
+
+        logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates")
+
+        return preprocessed_by_date
 
 
     def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
