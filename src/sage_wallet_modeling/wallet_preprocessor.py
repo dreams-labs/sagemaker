@@ -2,6 +2,7 @@
 Preprocesses training data for SageMaker XGBoost compatibility.
 """
 import logging
+from pathlib import Path
 import pandas as pd
 import numpy as np
 
@@ -26,21 +27,35 @@ class SageWalletsPreprocessor:
         self.wallets_config = sage_wallets_config
         self.preprocessing_config = self.wallets_config['preprocessing']
 
+        # Set up local output directory for this run
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+                    / "wallet_training_data_preprocessed")
+        if not base_dir.exists():
+            raise FileNotFoundError(f"Expected preprocessed data base directory not found: {base_dir}")
+        self.output_base = base_dir / self.wallets_config["training_data"]["local_directory"]
+        self.output_base.mkdir(exist_ok=True)
+
+        # Date suffix is used in saved file names only
+        self.date_suffix = None
+
 
     # -------------------------
     #     Primary Interface
     # -------------------------
-
-    def preprocess_training_data(self, training_data: dict) -> dict:
+    def preprocess_training_data(self, training_data: dict, date_suffix: str) -> dict:
         """
         Preprocess all training data splits for SageMaker compatibility.
 
         Params:
         - training_data (dict): Raw training data with keys like 'x_train', 'y_train', etc.
+        - date_suffix (str): Date suffix for file naming (e.g., "250301")
 
         Returns:
         - dict: Preprocessed training data ready for SageMaker upload
         """
+        # Store date_suffix for use in file operations
+        self.date_suffix = date_suffix
+
         # Split names that need X preprocessing
         x_splits = ['x_train', 'x_test', 'x_eval', 'x_val']
         y_splits = ['y_train', 'y_test', 'y_eval', 'y_val']
@@ -82,6 +97,9 @@ class SageWalletsPreprocessor:
 
             # Store combined data (no separate X/y anymore)
             processed_data[split_name] = combined_data
+
+            # Save preprocessed split to local file
+            self._save_preprocessed_df(combined_data, split_name)
 
             logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows "
                         f"× {combined_data.shape[1]} cols.")
@@ -320,3 +338,18 @@ class SageWalletsPreprocessor:
         }
 
         return metadata
+
+
+    def _save_preprocessed_df(self, df: pd.DataFrame, split_name: str) -> None:
+        """
+        Save a single preprocessed DataFrame to local CSV file.
+        Format matches exactly what gets uploaded to S3 for SageMaker.
+        """
+        if not hasattr(self, 'date_suffix') or not self.date_suffix:
+            raise ValueError("date_suffix must be set before saving preprocessed data")
+
+        filename = f"{split_name}_preprocessed_{self.date_suffix}.csv"  # Changed extension
+        filepath = self.output_base / filename
+
+        df.to_csv(filepath, index=False, header=False)  # Matches upload format exactly
+        logger.info(f"Saved preprocessed {split_name} split to {filepath}")
