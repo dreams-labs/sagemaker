@@ -222,7 +222,7 @@ class WalletWorkflowOrchestrator:
             # Upload metadata for this date (metadata still comes from preprocessing step)
             metadata_uri = self._upload_metadata_for_date(
                 date_suffix,
-                {},  # Empty metadata since we're reading from files
+                preprocessed_data_by_date[date_suffix]['metadata'],
                 context,
                 s3_client
             )
@@ -383,14 +383,13 @@ class WalletWorkflowOrchestrator:
         """
         Load preprocessed CSV files for upload, ensuring perfect consistency
         between saved files and uploaded data.
-
-        Returns:
-        - dict: Keyed by date_suffix, containing split DataFrames
         """
         # Get the preprocessed data directory from SageWalletsPreprocessor logic
         base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
                     / "wallet_training_data_preprocessed")
         local_dir = self.wallets_config["training_data"]["local_directory"]
+        if self.dataset == 'dev':
+            local_dir = f"{local_dir}_dev"
         preprocessed_dir = base_dir / local_dir
 
         splits = ['train', 'test', 'eval', 'val']
@@ -398,14 +397,28 @@ class WalletWorkflowOrchestrator:
 
         for date_suffix in date_suffixes:
             date_data = {}
+
+            # Load CSV files from date-specific folder
+            date_folder = preprocessed_dir / date_suffix
+            if not date_folder.exists():
+                raise FileNotFoundError(f"Date folder not found: {date_folder}")
+
             for split_name in splits:
-                filename = f"{split_name}_preprocessed_{date_suffix}.csv"
-                filepath = preprocessed_dir / filename
+                filename = f"{split_name}.csv"  # Changed from {split_name}_preprocessed_{date_suffix}.csv
+                filepath = date_folder / filename
 
                 if not filepath.exists():
                     raise FileNotFoundError(f"Preprocessed file not found: {filepath}")
 
                 date_data[split_name] = pd.read_csv(filepath, header=None)
+
+            # Load metadata from the same folder
+            metadata_file = date_folder / "metadata.json"
+            if metadata_file.exists():
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    date_data['metadata'] = json.load(f)
+            else:
+                raise FileNotFoundError(f"No metadata.json found in {date_folder}")
 
             data_by_date[date_suffix] = date_data
 
@@ -538,12 +551,6 @@ class WalletWorkflowOrchestrator:
     def _confirm_upload(self, context: UploadContext) -> bool:
         """
         Prompt user to confirm upload with summary logs.
-
-        Params:
-        - context (UploadContext): context containing paths and size
-
-        Returns:
-        - bool: True if user confirms, False otherwise
         """
         logger.milestone(
             f"<{context.dataset.upper()}> Ready to upload "
@@ -552,7 +559,7 @@ class WalletWorkflowOrchestrator:
             f"across {len(self.date_suffixes)} date folders."
         )
 
-        # If overwrite allowed, check for existing files to determine if an overwrite will actually happen
+        # If overwrite allowed, check for existing files
         if context.overwrite_existing:
             s3_client = boto3.client("s3")
             for suffix in self.date_suffixes:
@@ -564,16 +571,17 @@ class WalletWorkflowOrchestrator:
                     logger.milestone("This upload will overwrite existing files.")
                     break
 
-        # Log upload information and request approval
+        # Log upload information and request approval WITH SIZE
         logger.info(
             f"Target: s3://{context.bucket_name}/"
             f"{context.base_folder}/{context.folder_prefix}[DATE]/"
         )
-        confirmation = input("Proceed with upload? (y/N): ")
+        confirmation = input(f"Proceed with upload of {context.total_size_mb:.1f} MB? (y/N): ")
         if confirmation.lower() != 'y':
             logger.info("Upload cancelled")
             return False
         return True
+
 
     def _upload_csv_files(
         self,

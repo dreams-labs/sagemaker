@@ -3,9 +3,9 @@ Preprocesses training data for SageMaker XGBoost compatibility.
 """
 import logging
 from pathlib import Path
+import json
 import pandas as pd
 import numpy as np
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class SageWalletsPreprocessor:
         # Save metadata alongside CSV files
         processed_data['metadata'] = self._compile_training_metadata(training_data)
         metadata_file = self.output_base / self.date_suffix / "metadata.json"
-        with open(metadata_file, 'w') as f:
+        with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(processed_data['metadata'], f, indent=2)
         logger.info(f"Saved metadata to {metadata_file}")
 
