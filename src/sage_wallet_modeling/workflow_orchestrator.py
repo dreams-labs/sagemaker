@@ -61,17 +61,27 @@ class WalletWorkflowOrchestrator:
     #      Public Methods
     # ------------------------
 
-    def load_training_data(
-            self,
-            date_suffixes: list
+    def load_all_training_data(
+        self,
+        date_suffixes: list
         ):
         """
-        Load and combine training data across multiple prediction period dates.
+        Load training data for multiple prediction period dates, maintaining separate
+        datasets for each date suffix.
 
-        Files are loaded from wallets_config.training_data.local_directory.
+        Files are loaded from wallets_config.training_data.local_directory. Each date
+        suffix represents a distinct modeling period with its own train/test/eval/val
+        splits that should be processed independently.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
+
+        Returns:
+        - Sets self.training_data to nested dict structure:
+            {
+                "250301": {x_train, y_train, x_test, y_test, x_eval, y_eval, x_val, y_val},
+                "250401": {x_train, y_train, x_test, y_test, x_eval, y_eval, x_val, y_val}
+            }
 
         Data Split Usage Summary
         -----------------------
@@ -80,13 +90,8 @@ class WalletWorkflowOrchestrator:
         X_test/y_test: Hold-out test set for final model evaluation (traditional ML validation)
         X_validation/y_validation: Future time period data for realistic performance assessment
 
-        Key Interactions:
-        The Test set ML metrics (accuracy, R², etc.) are based on data from the same period
-         as the Train set.
-        The Validation set metrics are based on data from the future period just after the
-         base y_train period ends. The Validation set represents actual future data the model
-         would see in production, and Validation metrics measure model performance in a real
-         world scenario.
+        Note: Each date suffix maintains independent data splits. Offset records have
+        already been merged upstream, so no concatenation occurs at this stage.
         """
         # Data location validation with dataset suffix
         load_folder = self.wallets_config['training_data']['local_directory']
@@ -104,32 +109,31 @@ class WalletWorkflowOrchestrator:
         # Store date suffixes for upload method
         self.date_suffixes = date_suffixes
 
-        combined_data = {}
+        training_data_by_date = {}
 
         logger.milestone(f"<{dataset.upper()}> Loading training data for {len(date_suffixes)} "
                     f"periods: {date_suffixes}")
-        for i, date_suffix in enumerate(date_suffixes):
+        for date_suffix in date_suffixes:
             period_data = self._load_single_date_data(date_suffix)
+            training_data_by_date[date_suffix] = period_data
 
-            if i == 0:
-                # Initialize with first period's data
-                combined_data = period_data.copy()
-            else:
-                # Concatenate each DataFrame with matching key
-                for key, df in period_data.items():
-                    combined_data[key] = pd.concat([combined_data[key], df], ignore_index=True)
-
-        self.training_data = combined_data
+        self.training_data = training_data_by_date
 
         # Success logging with data shape summary
-        total_rows = sum(df.shape[0] for df in combined_data.values())
-        data_splits = list(combined_data.keys())
-        logger.info(f"Training data loaded successfully: {len(data_splits)} splits, "
-                    f"{total_rows:,} total rows")
+        total_rows = sum(
+            df.shape[0]
+            for date_data in training_data_by_date.values()
+            for df in date_data.values()
+        )
+        offsets_per_df = len(self.training_data[date_suffixes[0]]
+                             ['x_train'].index.get_level_values('epoch_start_date').unique())
+        logger.info(f"Training data loaded successfully: {total_rows:,} total rows "
+                    f"and {offsets_per_df} offsets for each date_suffix.")
 
-        # Log individual split sizes for debugging
-        for split_name, df in combined_data.items():
-            logger.debug(f"  {split_name}: {df.shape[0]:,} rows × {df.shape[1]} cols")
+        # Log individual date sizes for debugging
+        for date_suffix, date_data in training_data_by_date.items():
+            date_rows = sum(df.shape[0] for df in date_data.values())
+            logger.debug(f"  {date_suffix}: {date_rows:,} rows across {len(date_data)} splits")
 
 
     def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
