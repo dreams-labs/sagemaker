@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +112,12 @@ class SageWalletsPreprocessor:
             logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows "
                         f"× {combined_data.shape[1]} cols.")
 
-        # Compile training metadata using x_train reference
+        # Save metadata alongside CSV files
         processed_data['metadata'] = self._compile_training_metadata(training_data)
+        metadata_file = self.output_base / self.date_suffix / "metadata.json"
+        with open(metadata_file, 'w') as f:
+            json.dump(processed_data['metadata'], f, indent=2)
+        logger.info(f"Saved metadata to {metadata_file}")
 
         return processed_data
 
@@ -349,14 +354,18 @@ class SageWalletsPreprocessor:
 
     def _save_preprocessed_df(self, df: pd.DataFrame, split_name: str) -> None:
         """
-        Save a single preprocessed DataFrame to local CSV file.
+        Save a single preprocessed DataFrame to local CSV file in date-specific folder.
         Format matches exactly what gets uploaded to S3 for SageMaker.
         """
         if not hasattr(self, 'date_suffix') or not self.date_suffix:
             raise ValueError("date_suffix must be set before saving preprocessed data")
 
-        filename = f"{split_name}_preprocessed_{self.date_suffix}.csv"  # Changed extension
-        filepath = self.output_base / filename
+        # Create date-specific folder structure matching S3 upload pattern
+        date_folder = self.output_base / self.date_suffix
+        date_folder.mkdir(exist_ok=True)
 
-        df.to_csv(filepath, index=False, header=False)  # Matches upload format exactly
+        filename = f"{split_name}.csv"
+        filepath = date_folder / filename
+
+        df.to_csv(filepath, index=False, header=False)
         logger.info(f"Saved preprocessed {split_name} split to {filepath}")
