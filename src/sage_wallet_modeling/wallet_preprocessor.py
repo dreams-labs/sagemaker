@@ -13,6 +13,9 @@ class SageWalletsPreprocessor:
     """
     Handles preprocessing of training data splits for SageMaker XGBoost requirements.
 
+    Params:
+    - sage_wallets_config (dict): from yaml
+
     SageMaker XGBoost expects:
     - Target variable as first column
     - No column headers
@@ -24,8 +27,10 @@ class SageWalletsPreprocessor:
             self,
             sage_wallets_config: dict
         ):
+        # Configs
         self.wallets_config = sage_wallets_config
         self.preprocessing_config = self.wallets_config['preprocessing']
+        self.dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         # Set up local output directory for this run
         base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
@@ -33,6 +38,8 @@ class SageWalletsPreprocessor:
         if not base_dir.exists():
             raise FileNotFoundError(f"Expected preprocessed data base directory not found: {base_dir}")
         self.output_base = base_dir / self.wallets_config["training_data"]["local_directory"]
+        if self.dataset == 'dev':
+            self.output_base = self.output_base.with_name(f"{self.output_base.name}_dev")
         self.output_base.mkdir(exist_ok=True)
 
         # Date suffix is used in saved file names only

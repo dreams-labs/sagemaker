@@ -27,8 +27,8 @@ class UploadContext:
     bucket_name: str
     base_folder: str
     folder_prefix: str
-    sanitized_target: str
     total_size_mb: float
+    total_rows: int
     dataset: str
     overwrite_existing: bool
 
@@ -50,6 +50,7 @@ class WalletWorkflowOrchestrator:
         # Config
         ucv.validate_sage_wallets_config(wallets_config)
         self.wallets_config = wallets_config
+        self.dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
         # Training data variables
         self.training_data = None
@@ -96,9 +97,8 @@ class WalletWorkflowOrchestrator:
         """
         # Data location validation with dataset suffix
         load_folder = self.wallets_config['training_data']['local_directory']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
 
-        if dataset == 'dev':
+        if self.dataset == 'dev':
             load_folder = f"{load_folder}_dev"
 
         self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / load_folder
@@ -112,7 +112,7 @@ class WalletWorkflowOrchestrator:
 
         training_data_by_date = {}
 
-        logger.milestone(f"<{dataset.upper()}> Loading training data for {len(date_suffixes)} "
+        logger.milestone(f"<{self.dataset.upper()}> Loading training data for {len(date_suffixes)} "
                     f"periods: {date_suffixes}")
         for date_suffix in date_suffixes:
             period_data = self._load_single_date_data(date_suffix)
@@ -180,45 +180,49 @@ class WalletWorkflowOrchestrator:
             )
             logger.debug(f"  {date_suffix}: {total_rows:,} preprocessed rows")
 
-        logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates")
-
-        return preprocessed_by_date
+        logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates.")
 
 
-    def upload_training_data(self, preprocessed_data: dict, overwrite_existing: bool = False):
+    def upload_training_data(self, overwrite_existing: bool = False):
         """
         Upload preprocessed training data splits to S3, organized by date suffix folders.
-        Filenames include sanitized target variable names for metadata preservation.
+        Reads from saved CSV files to ensure perfect consistency with local artifacts.
 
         Params:
-        - preprocessed_data (dict): Preprocessed data from SageWalletsPreprocessor
         - overwrite_existing (bool): If True, overwrites existing S3 objects
         """
-        if not preprocessed_data:
-            raise ValueError("No preprocessed data provided.")
-
         if not self.date_suffixes:
-            raise ValueError("No date suffixes available. Ensure load_training_data() completed "
+            raise ValueError("No date suffixes available. Ensure load_all_training_data() completed "
                             "successfully.")
 
+        # Load preprocessed data from saved CSV files
+        preprocessed_data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
+
         # Initialize UploadContext for this upload operation
-        context = self._prepare_upload_context(preprocessed_data, overwrite_existing)
+        context = self._prepare_upload_context(preprocessed_data_by_date, overwrite_existing)
 
         # Confirm upload based on prepared context
         if not self._confirm_upload(context):
             return {}
+
+        logger.info("Beginning approved upload...")
 
         s3_client = boto3.client('s3')
         upload_results = {}
 
         for date_suffix in self.date_suffixes:
             # Upload CSV splits for this date
-            date_uris = self._upload_csv_files(date_suffix, preprocessed_data, context, s3_client)
+            date_uris = self._upload_csv_files(
+                date_suffix,
+                preprocessed_data_by_date[date_suffix],
+                context,
+                s3_client
+            )
 
-            # Upload metadata for this date
+            # Upload metadata for this date (metadata still comes from preprocessing step)
             metadata_uri = self._upload_metadata_for_date(
                 date_suffix,
-                preprocessed_data.get('metadata', {}),
+                {},  # Empty metadata since we're reading from files
                 context,
                 s3_client
             )
@@ -227,7 +231,6 @@ class WalletWorkflowOrchestrator:
             upload_results[date_suffix] = date_uris
 
         return upload_results
-
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
@@ -274,11 +277,11 @@ class WalletWorkflowOrchestrator:
                     # Filter for CSV files that start with the exact split name
                     matching_objects = [
                         obj for obj in response['Contents']
-                        if obj['Key'].split('/')[-1].startswith(f"{split_name}_") and obj['Key'].endswith('.csv')
+                        if obj['Key'].split('/')[-1].startswith(f"{split_name}") and obj['Key'].endswith('.csv')
                     ]
 
                     if len(matching_objects) == 0:
-                        raise FileNotFoundError(f"No CSV files found starting with '{split_name}_' "
+                        raise FileNotFoundError(f"No CSV files found starting with '{split_name}' "
                                                 f"at: s3://{bucket_name}/{prefix}")
 
                     if len(matching_objects) > 1:
@@ -326,36 +329,40 @@ class WalletWorkflowOrchestrator:
     # ------------------------
 
     def _prepare_upload_context(
-        self,
-        preprocessed_data: dict,
-        overwrite_existing: bool
-    ) -> UploadContext:
+            self,
+            preprocessed_data_by_date: dict,
+            overwrite_existing: bool
+        ) -> UploadContext:
         """
         Prepare UploadContext with all S3 paths, size, and settings.
 
         Params:
-        - preprocessed_data (dict): dict of DataFrames & metadata
+        - preprocessed_data_by_date (dict): dict keyed by date_suffix containing DataFrames & metadata
         - overwrite_existing (bool): whether to overwrite existing S3 objects
 
         Returns:
         - UploadContext: configured upload context
         """
-        # Sanitize target variable name
-        target_name = self.training_data['y_train'].columns[0]
-        sanitized_target = target_name.replace('|', '_').replace('/', '_')
-
         # Get S3 upload paths
         bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
 
-        # Compute total upload size (MB)
+        # Compute total upload size (MB) across all dates
         total_size_mb = (
             sum(
                 df.memory_usage(deep=True).sum()
-                for df in preprocessed_data.values()
+                for date_data in preprocessed_data_by_date.values()
+                for df in date_data.values()
                 if isinstance(df, pd.DataFrame)
             )
             / (1024 * 1024)
-            * len(self.date_suffixes)
+        )
+
+        # Compute total rows across all DataFrames and date suffixes
+        total_rows = sum(
+            len(df)
+            for date_data in preprocessed_data_by_date.values()
+            for df in date_data.values()
+            if isinstance(df, pd.DataFrame)
         )
 
         # Determine dataset tag
@@ -365,11 +372,45 @@ class WalletWorkflowOrchestrator:
             bucket_name=bucket_name,
             base_folder=base_folder,
             folder_prefix=folder_prefix,
-            sanitized_target=sanitized_target,
             total_size_mb=total_size_mb,
+            total_rows=total_rows,
             dataset=dataset,
             overwrite_existing=overwrite_existing
         )
+
+
+    def _load_preprocessed_training_data(self, date_suffixes: list) -> dict:
+        """
+        Load preprocessed CSV files for upload, ensuring perfect consistency
+        between saved files and uploaded data.
+
+        Returns:
+        - dict: Keyed by date_suffix, containing split DataFrames
+        """
+        # Get the preprocessed data directory from SageWalletsPreprocessor logic
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+                    / "wallet_training_data_preprocessed")
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        preprocessed_dir = base_dir / local_dir
+
+        splits = ['train', 'test', 'eval', 'val']
+        data_by_date = {}
+
+        for date_suffix in date_suffixes:
+            date_data = {}
+            for split_name in splits:
+                filename = f"{split_name}_preprocessed_{date_suffix}.csv"
+                filepath = preprocessed_dir / filename
+
+                if not filepath.exists():
+                    raise FileNotFoundError(f"Preprocessed file not found: {filepath}")
+
+                date_data[split_name] = pd.read_csv(filepath, header=None)
+
+            data_by_date[date_suffix] = date_data
+
+        return data_by_date
+
 
     def _load_single_date_data(self, date_suffix: str):
         """
@@ -493,6 +534,7 @@ class WalletWorkflowOrchestrator:
 
         return bucket_name, base_folder, folder_prefix
 
+
     def _confirm_upload(self, context: UploadContext) -> bool:
         """
         Prompt user to confirm upload with summary logs.
@@ -505,7 +547,8 @@ class WalletWorkflowOrchestrator:
         """
         logger.milestone(
             f"<{context.dataset.upper()}> Ready to upload "
-            f"{context.total_size_mb:.1f} MB of preprocessed training data "
+            f"{context.total_rows} total rows "
+            f"({context.total_size_mb:.1f} MB) of preprocessed training data "
             f"across {len(self.date_suffixes)} date folders."
         )
 
@@ -522,7 +565,6 @@ class WalletWorkflowOrchestrator:
                     break
 
         # Log upload information and request approval
-        logger.info(f"Target variable: {context.sanitized_target}")
         logger.info(
             f"Target: s3://{context.bucket_name}/"
             f"{context.base_folder}/{context.folder_prefix}[DATE]/"
@@ -549,7 +591,7 @@ class WalletWorkflowOrchestrator:
             if split_name == 'metadata':
                 continue
 
-            filename = f"{split_name}_{context.sanitized_target}.csv"
+            filename = f"{split_name}.csv"
             s3_key = f"{context.base_folder}/{context.folder_prefix}{date_suffix}/{filename}"
             s3_uri = f"s3://{context.bucket_name}/{s3_key}"
 
@@ -585,7 +627,7 @@ class WalletWorkflowOrchestrator:
         Upload metadata JSON for one date to S3.
         Returns the metadata file's S3 URI.
         """
-        filename = f"metadata_{context.sanitized_target}.json"
+        filename = "metadata.json"
         s3_key = f"{context.base_folder}/{context.folder_prefix}{date_suffix}/{filename}"
         s3_uri = f"s3://{context.bucket_name}/{s3_key}"
 
