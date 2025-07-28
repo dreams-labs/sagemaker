@@ -21,3 +21,6 @@ aws: #SageMaker
     training_bucket: wallet-training-data
     preprocessed_directory: training-data-preprocessed
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
+
+n_threads: #SageMaker
+    train_all_models: 2
