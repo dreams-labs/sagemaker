@@ -44,13 +44,17 @@ class WalletWorkflowOrchestrator:
 
     Params:
     - wallets_config (dict): abbreviated name for sage_wallets_config.yaml
+    - modeling_config (dict): abbreviated name for sage_wallets_modeling_config.yaml
     """
-    def __init__(self, wallets_config: dict):
+    def __init__(self, wallets_config: dict, modeling_config: dict):
 
-        # Config
+        # Configs
         ucv.validate_sage_wallets_config(wallets_config)
+        ucv.validate_sage_wallets_modeling_config(modeling_config)
         self.wallets_config = wallets_config
-        self.dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+        self.modeling_config = modeling_config
+        self.dataset = self.wallets_config['training_data'].get('dataset', 'dev')
+
 
         # Training data variables
         self.training_data = None
