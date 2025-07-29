@@ -167,103 +167,6 @@ class WalletModeler:
         }
 
 
-    def _configure_estimator(self, model_output_path: str):
-        """
-        Configures estimator while logginc model details
-        """
-
-        # Configure estimator with basic hyperparameters
-        model_container = sagemaker.image_uris.retrieve(
-            framework=self.modeling_config['framework']['name'],
-            region=self.sagemaker_session.boto_region_name,
-            version=self.modeling_config['framework']['version']
-        )
-
-        # Log version info and other metadata
-        logger.info(f"SageMaker XGBoost container: {model_container}")
-
-        # Extract version from container URI for cleaner logging
-        container_parts = model_container.split('/')[-1].split(':')
-        if len(container_parts) > 1:
-            container_version = container_parts[-1]
-            logger.info(f"Container version tag: {container_version}")
-
-        # Log the framework version from config for comparison
-        config_version = self.modeling_config['framework']['version']
-        logger.info(f"Requested framework version: {config_version}")
-
-        xgb_estimator = Estimator(
-            image_uri=model_container,
-            instance_type=self.modeling_config['metaparams']['instance_type'],
-            instance_count=self.modeling_config['metaparams']['instance_count'],
-            role=self.role,
-            sagemaker_session=self.sagemaker_session,
-            hyperparameters=self.modeling_config['training']['hyperparameters'],
-            output_path=model_output_path
-        )
-        return xgb_estimator
-
-
-    def _validate_model_output_path(self):
-        """
-        Defines the model_output_path and passes a confirmation request if a
-         model already exists there.
-        """
-        # Create descriptive model output path
-        model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
-                             f"sagemaker-models/{self.upload_directory}/")
-
-        # Check if model output path already exists
-        s3_client = self.sagemaker_session.boto_session.client('s3')
-        bucket_name = self.wallets_config['aws']['training_bucket']
-        prefix = f"sagemaker-models/{self.upload_directory}/"
-
-        try:
-            response = s3_client.list_objects_v2(
-                Bucket=bucket_name,
-                Prefix=prefix,
-                MaxKeys=1
-            )
-
-            if 'Contents' in response:
-                confirmation = u.request_confirmation(
-                    f"A model for {self.date_suffix} already exists in {model_output_path}. "
-                        "Overwrite existing model?",
-                    approval_override=self.override_approvals
-                )
-                if confirmation is False:
-                    logger.info("Training cancelled by user")
-                    return {}
-        except ClientError as e:
-            if e.response['Error']['Code'] != 'NoSuchBucket':
-                logger.warning(f"Unable to check existing models: {e}")
-
-        return model_output_path
-
-
-    def _validate_s3_uris(self):
-        """
-        Confirms S3 URIs use an appropriate date suffix and have the required splits.
-        """
-        if not self.s3_uris:
-            raise ConfigError("s3_uris required for cloud training")
-        if self.date_suffix not in self.s3_uris:
-            available_dates = list(self.s3_uris.keys())
-            raise ConfigError(f"Date suffix '{self.date_suffix}' not found in S3 URIs. "
-                              f"Available: {available_dates}")
-
-        date_uris = self.s3_uris[self.date_suffix]
-
-        # Validate required training data
-        required_splits = ['train', 'eval']
-        for split in required_splits:
-            if split not in date_uris:
-                raise ConfigError(f"{split.capitalize()} data URI not found for date "
-                                  f"{self.date_suffix}")
-
-        return date_uris
-
-
     def load_existing_model(self):
         """
         Load the most recent trained model for a given date_suffix.
@@ -578,6 +481,129 @@ class WalletModeler:
         u.notify('mellow_chime_005')
 
         return result_array
+
+
+
+
+    # ------------------------------
+    #      Train Model Methods
+    # ------------------------------
+
+    def _configure_estimator(self, model_output_path: str):
+        """
+        Configure XGBoost estimator with dynamic objective based on model type.
+
+        Params:
+        - model_output_path (str): S3 path for model artifacts
+
+        Returns:
+        - Estimator: Configured SageMaker XGBoost estimator
+        """
+        # Configure hyperparameters with dynamic objective
+        hyperparameters = self.modeling_config['training']['hyperparameters'].copy()
+        model_type = self.modeling_config['training']['model_type']
+
+        # Configure model type
+        if model_type == 'classification':
+            hyperparameters['objective'] = 'binary:logistic'
+        elif model_type == 'regression':
+            hyperparameters['objective'] = 'reg:linear'
+        logger.info(f"Model type: {model_type}, Objective: {hyperparameters['objective']}")
+
+        # Configure eval_metric
+        if 'eval_metric' in self.modeling_config['training']:
+            hyperparameters['eval_metric'] = self.modeling_config['training']['eval_metric']
+        logger.info(f"Using eval_metric: {hyperparameters['eval_metric']}")
+
+        # Define container
+        model_container = sagemaker.image_uris.retrieve(
+            framework=self.modeling_config['framework']['name'],
+            region=self.sagemaker_session.boto_region_name,
+            version=self.modeling_config['framework']['version']
+        )
+
+        # Log version info and other metadata
+        logger.info(f"SageMaker XGBoost container: {model_container}")
+        container_parts = model_container.split('/')[-1].split(':')
+        if len(container_parts) > 1:
+            container_version = container_parts[-1]
+            logger.info(f"Container version tag: {container_version}")
+        config_version = self.modeling_config['framework']['version']
+        logger.info(f"Requested framework version: {config_version}")
+
+        # Create estimator
+        xgb_estimator = Estimator(
+            image_uri=model_container,
+            instance_type=self.modeling_config['metaparams']['instance_type'],
+            instance_count=self.modeling_config['metaparams']['instance_count'],
+            role=self.role,
+            sagemaker_session=self.sagemaker_session,
+            hyperparameters=hyperparameters,
+            output_path=model_output_path
+        )
+
+        return xgb_estimator
+
+
+    def _validate_model_output_path(self):
+        """
+        Defines the model_output_path and passes a confirmation request if a
+         model already exists there.
+        """
+        # Create descriptive model output path
+        model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
+                             f"sagemaker-models/{self.upload_directory}/")
+
+        # Check if model output path already exists
+        s3_client = self.sagemaker_session.boto_session.client('s3')
+        bucket_name = self.wallets_config['aws']['training_bucket']
+        prefix = f"sagemaker-models/{self.upload_directory}/"
+
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=bucket_name,
+                Prefix=prefix,
+                MaxKeys=1
+            )
+
+            if 'Contents' in response:
+                confirmation = u.request_confirmation(
+                    f"A model for {self.date_suffix} already exists in {model_output_path}. "
+                        "Overwrite existing model?",
+                    approval_override=self.override_approvals
+                )
+                if confirmation is False:
+                    logger.info("Training cancelled by user")
+                    return {}
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'NoSuchBucket':
+                logger.warning(f"Unable to check existing models: {e}")
+
+        return model_output_path
+
+
+    def _validate_s3_uris(self):
+        """
+        Confirms S3 URIs use an appropriate date suffix and have the required splits.
+        """
+        if not self.s3_uris:
+            raise ConfigError("s3_uris required for cloud training")
+        if self.date_suffix not in self.s3_uris:
+            available_dates = list(self.s3_uris.keys())
+            raise ConfigError(f"Date suffix '{self.date_suffix}' not found in S3 URIs. "
+                              f"Available: {available_dates}")
+
+        date_uris = self.s3_uris[self.date_suffix]
+
+        # Validate required training data
+        required_splits = ['train', 'eval']
+        for split in required_splits:
+            if split not in date_uris:
+                raise ConfigError(f"{split.capitalize()} data URI not found for date "
+                                  f"{self.date_suffix}")
+
+        return date_uris
+
 
 
     # -------------------------------
