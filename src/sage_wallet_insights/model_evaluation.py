@@ -1,11 +1,12 @@
 import sys
 from pathlib import Path
-import pandas as pd
 from typing import Tuple
+import pandas as pd
 
 # Add wallet_insights to path    # pylint:disable=wrong-import-position
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.model_evaluation as wime
+from utils import ConfigError
 
 
 # pylint:disable=invalid-name  # X isn't lowercase
@@ -63,7 +64,7 @@ def load_sagemaker_predictions(
     return pred_series, actuals_series
 
 
-def create_mock_pipeline(objective: str):
+def create_mock_pipeline():
     """
     Create a mock pipeline for SageMaker evaluation compatibility.
 
@@ -75,7 +76,7 @@ def create_mock_pipeline(objective: str):
     """
     return type('MockPipeline', (), {
         'named_steps': {'estimator': type('MockModel', (), {
-            'get_params': lambda self: {'objective': objective}
+            'get_params': lambda self: {'objective': 'mock_objective'}
         })()},
         '__getitem__': lambda self, key: type('MockTransformer', (), {
             'transform': lambda self, X: X
@@ -118,14 +119,11 @@ def create_sagemaker_evaluator(
     X_val = pd.read_parquet(training_data_path / f"x_val_{date_suffix}.parquet")
     y_val = pd.read_parquet(training_data_path / f"y_val_{date_suffix}.parquet")
 
-    # Identify target variable and model type
-    target_variable = y_val_true_series.name or y_train.columns[0]
-    objective = sage_wallets_modeling_config['training']['hyperparameters']['objective']
-    model_type = 'regression' if objective[:3] == 'reg' else 'unknown'
-
     # Create model_id and modeling_config
     model_id = f"sagemaker_{sage_wallets_config['training_data']['local_directory']}_{date_suffix}"
 
+    target_variable = y_val_true_series.name or y_train.columns[0]
+    model_type = sage_wallets_modeling_config['training']['model_type']
     modeling_config = {
         'target_variable': target_variable,
         'model_type': model_type,
@@ -134,11 +132,15 @@ def create_sagemaker_evaluator(
             'modeling_period_duration': 30
         },
         'sagemaker_metadata': {
-            'objective': objective,
             'local_directory': sage_wallets_config['training_data']['local_directory'],
             'date_suffix': date_suffix
         }
     }
+
+    # Include y_pred_threshold for classification models
+    if model_type == 'classification':
+        y_pred_thresh = sage_wallets_modeling_config['target']['classification']['threshold']
+        modeling_config['y_pred_threshold'] = y_pred_thresh
 
     # Create wallet_model_results dictionary
     wallet_model_results = {
@@ -162,11 +164,17 @@ def create_sagemaker_evaluator(
         'validation_target_vars_df': y_val,
 
         # Mock pipeline
-        'pipeline': create_mock_pipeline(objective)
+        'pipeline': create_mock_pipeline()
     }
 
     # Create and return evaluator
-    wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
+    if model_type == 'regression':
+        wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
+    elif model_type == 'classification':
+        wallet_evaluator = wime.ClassifierEvaluator(wallet_model_results)
+    else:
+        raise ConfigError(f"Unknown model type {model_type} found in config.")
+
     return wallet_evaluator
 
 
