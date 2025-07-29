@@ -21,13 +21,13 @@ class SageWalletsModelingConfig(NoExtrasBaseModel):
     """Top-level structure of the main sagemaker_modeling_config.yaml file."""
     framework: 'FrameworkConfig' = Field(...)
     metaparams: 'MetaparamsConfig' = Field(...)
+    target: 'TargetConfig' = Field(...)
     training: 'TrainingConfig' = Field(...)
     predicting: 'PredictingConfig' = Field(...)
 
 
-# Framework section
-# -----------------
-
+# [Framework]
+# -----------
 class FrameworkName(str, Enum):
     """Supported ML framework names."""
     XGBOOST = "xgboost"
@@ -44,8 +44,8 @@ class FrameworkConfig(BaseModel):
     version: FrameworkVersion = Field(...)
 
 
-# Metaparams section
-# ------------------
+# [Metaparams]
+# ------------
 class InstanceType(str, Enum):
     """Supported AWS instance types."""
     ML_M5_LARGE = "ml.m5.large"
@@ -70,19 +70,25 @@ class MetaparamsConfig(BaseModel):
                               "Local folders should use underscores instead of hyphens.")
 
 
-
-# Training section
-# ----------------
+# [Training]
+# ----------
+class ModelType(str, Enum):
+    """Enum for self[training][model_type]."""
+    REGRESSION = "regression"
+    CLASSIFICATION = "classification"
 
 class TrainingConfig(NoExtrasBaseModel):
     """
     Configuration for training settings.
     """
+    model_type: 'ModelType' = Field(
+        ..., description="Type of model: 'regression' or 'classification'"
+    )
     hyperparameters: dict = Field(...)
 
-# Predicting section
-# ------------------
 
+# [Predicting]
+# ------------
 class PredictMethod(str, Enum):
     """Supported prediction methods."""
     ENDPOINT = "endpoint"
@@ -93,6 +99,25 @@ class PredictingConfig(NoExtrasBaseModel):
     Configuration for prediction settings.
     """
     predict_method: PredictMethod = Field(...)
+
+
+# [Target]
+# --------
+class ClassificationConfig(NoExtrasBaseModel):
+    """
+    Configuration for self[target][classification]
+    """
+    threshold: float = Field(
+        ..., description="Threshold for classification target: if target > threshold, class = 1"
+    )
+
+class TargetConfig(NoExtrasBaseModel):
+    """
+    Configuration for target settings.
+    """
+    classification: ClassificationConfig = Field(
+        ..., description="Classification target settings"
+    )
 
 
 # ============================================================================

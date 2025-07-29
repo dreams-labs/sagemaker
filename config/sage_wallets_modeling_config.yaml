@@ -8,7 +8,13 @@ metaparams:
     instance_type: ml.m5.large
     instance_count: 1
 
+target:
+    classification:
+        threshold: 0.05  # if target > {threshold}, class = 1
+
 training:
+    model_type: "regression"  # regression or classification
+
     #KeyParam Hyperparameters
     hyperparameters:
         objective: reg:linear
