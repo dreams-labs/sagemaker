@@ -111,10 +111,11 @@ class AWSConfig(NoExtrasBaseModel):
 
 # NThreads section
 # ----------------
-class NThreadsConfig(NoExtrasBaseModel):
+class NThreadsConfig(BaseModel):
     """
     Configuration for SageMaker threading settings.
     """
+    upload_all_training_data: int = Field(...)
     train_all_models: int = Field(...)
 
 
