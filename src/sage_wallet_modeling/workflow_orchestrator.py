@@ -188,10 +188,11 @@ class WalletWorkflowOrchestrator:
         logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates.")
 
 
-    def upload_training_data(self, overwrite_existing: bool = False):
+    def upload_all_training_data(self, overwrite_existing: bool = False):
         """
         Upload preprocessed training data splits to S3, organized by date suffix folders.
         Reads from saved CSV files to ensure perfect consistency with local artifacts.
+        Uses multithreading to upload date folders in parallel.
 
         Params:
         - overwrite_existing (bool): If True, overwrites existing S3 objects
@@ -212,30 +213,65 @@ class WalletWorkflowOrchestrator:
 
         logger.info("Beginning approved upload...")
 
-        s3_client = boto3.client('s3')
         upload_results = {}
+        n_threads = self.wallets_config['n_threads']['upload_all_training_data']
 
-        for date_suffix in self.date_suffixes:
-            # Upload CSV splits for this date
-            date_uris = self._upload_csv_files(
-                date_suffix,
-                preprocessed_data_by_date[date_suffix],
-                context,
-                s3_client
-            )
+        logger.info(f"Uploading data for {len(self.date_suffixes)} date periods with {n_threads} threads...")
 
-            # Upload metadata for this date (metadata still comes from preprocessing step)
-            metadata_uri = self._upload_metadata_for_date(
-                date_suffix,
-                preprocessed_data_by_date[date_suffix]['metadata'],
-                context,
-                s3_client
-            )
-            date_uris['metadata'] = metadata_uri
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_date = {
+                executor.submit(
+                    self._upload_single_date,
+                    date_suffix,
+                    preprocessed_data_by_date[date_suffix],
+                    context
+                ): date_suffix
+                for date_suffix in self.date_suffixes
+            }
 
-            upload_results[date_suffix] = date_uris
+            for future in concurrent.futures.as_completed(future_to_date):
+                date_suffix = future_to_date[future]
+                result = future.result()
+                upload_results[date_suffix] = result
 
+        logger.info(f"All {len(upload_results)} date uploads completed successfully.")
         return upload_results
+
+
+    def _upload_single_date(self, date_suffix: str, preprocessed_data: dict, context: UploadContext) -> dict:
+        """
+        Upload all files for a single date suffix to S3.
+
+        Params:
+        - date_suffix (str): Date suffix for this upload
+        - preprocessed_data (dict): Preprocessed data for this date
+        - context (UploadContext): Upload configuration and metadata
+
+        Returns:
+        - dict: S3 URIs for all uploaded files for this date
+        """
+        s3_client = boto3.client('s3')
+
+        # Upload CSV splits for this date
+        date_uris = self._upload_csv_files(
+            date_suffix,
+            preprocessed_data,
+            context,
+            s3_client
+        )
+
+        # Upload metadata for this date
+        metadata_uri = self._upload_metadata_for_date(
+            date_suffix,
+            preprocessed_data['metadata'],
+            context,
+            s3_client
+        )
+        date_uris['metadata'] = metadata_uri
+
+        logger.info(f"Successfully completed upload for {date_suffix}")
+        return date_uris
+
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
@@ -624,8 +660,9 @@ class WalletWorkflowOrchestrator:
             f"Target: s3://{context.bucket_name}/"
             f"{context.base_folder}/{context.folder_prefix}[DATE]/"
         )
-        confirmation = input(f"Proceed with upload of {context.total_size_mb:.1f} MB? (y/N): ")
-        if confirmation.lower() != 'y':
+        confirmation = u.request_confirmation(f"Proceed with upload of {context.total_size_mb:.1f} "
+                                              "MB? (y/N): ")
+        if not confirmation:
             logger.info("Upload cancelled")
             return False
         return True
