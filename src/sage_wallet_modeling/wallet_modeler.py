@@ -58,13 +58,16 @@ class WalletModeler:
                 test:  {uri}
                 eval:  {uri}
                 val:   {uri}
+    - override_approvals (Optional[bool]): if None, interactive confirmations; if True or False,
+        override confirmations with that value.
     """
     def __init__(
             self,
             wallets_config: Dict,
             modeling_config: Dict,
             date_suffix: str,
-            s3_uris: Dict[str, Dict[str, str]] = None
+            s3_uris: Dict[str, Dict[str, str]] = None,
+            override_approvals: Optional[bool] = None
         ):
         # Configs
         ucv.validate_sage_wallets_config(wallets_config)
@@ -98,6 +101,9 @@ class WalletModeler:
         self.endpoint_name: Optional[str] = None
         self.predictor: Optional[sagemaker.predictor.Predictor] = None
 
+        # Misc
+        self.override_approvals = override_approvals
+
 
     # ------------------------
     #      Public Methods
@@ -129,8 +135,7 @@ class WalletModeler:
                 raise ConfigError(f"{split.capitalize()} data URI not found for date "
                                   f"{self.date_suffix}")
 
-        logger.info("Starting SageMaker training...")
-        u.notify('logo_sci_fi_warm_swell')
+        logger.info("Starting SageMaker training sequence...")
 
         # Configure estimator with basic hyperparameters
         model_container = sagemaker.image_uris.retrieve(
@@ -170,10 +175,12 @@ class WalletModeler:
             )
 
             if 'Contents' in response:
-                u.notify('alert_mellow_positive')
-                confirmation = input(f"Model {model_output_path} already exists. "
-                                     "Overwrite existing model? (y/N): ")
-                if confirmation.lower() != 'y':
+                confirmation = u.request_confirmation(
+                    f"A model for {self.date_suffix} already exists in {model_output_path}. "
+                        "Overwrite existing model?",
+                    approval_override=self.override_approvals
+                )
+                if confirmation is False:
                     logger.info("Training cancelled by user")
                     return {}
         except ClientError as e:
@@ -205,8 +212,9 @@ class WalletModeler:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         job_name = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-{timestamp}"
 
+        u.notify('logo_sci_fi_warm_swell')
         logger.info(f"Launching training job: {job_name}")
-        logger.info(f"Model output path: {model_output_path}")
+        logger.info(f"Model output parent directory: {model_output_path}")
 
         xgb_estimator.fit(
             inputs={
@@ -507,8 +515,11 @@ class WalletModeler:
         logger.info(f"Prediction preview: {len(df)} rows across {total_chunks} chunks "
               f"({estimated_total_mb:.2f}MB estimated total size)")
 
-        u.notify('alert_mellow_positive')
-        confirmation = input("Proceed with prediction? (y/N): ")
+        confirmation = u.request_confirmation(
+            "Proceed with prediction?",
+            approval_override=self.override_approvals
+        )
+
         if confirmation.lower() != 'y':
             logger.info("Prediction cancelled by user")
             return np.array([])
@@ -564,10 +575,10 @@ class WalletModeler:
         if existing_endpoint:
             logger.warning("An existing active endpoint matches the deployment prefix: "
                            f"{existing_endpoint}")
-            u.notify('alert_mellow_positive')
-            confirmation = input(
+            confirmation = u.request_confirmation(
                 f"Endpoint '{existing_endpoint}' already exists. "
-                "Deploy a new endpoint anyway? (y/N): "
+                    "Deploy a new endpoint anyway?",
+                approval_override=self.override_approvals
             )
             if confirmation.lower() != 'y':
                 logger.info("Deployment cancelled by user; using existing endpoint.")

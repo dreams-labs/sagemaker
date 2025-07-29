@@ -22,6 +22,7 @@ class SageWalletsConfig(NoExtrasBaseModel):
     """Top-level structure of the main sagemaker_config.yaml file."""
     training_data: 'TrainingDataConfig' = Field(...)
     preprocessing: 'PreprocessingConfig' = Field(...)
+    workflow: 'WorkflowConfig' = Field(...)
     aws: 'AWSConfig' = Field(...)
     n_threads: 'NThreadsConfig' = Field(...)
 
@@ -115,6 +116,15 @@ class NThreadsConfig(NoExtrasBaseModel):
     Configuration for SageMaker threading settings.
     """
     train_all_models: int = Field(...)
+
+
+# Workflow section
+# ----------------
+class WorkflowConfig(NoExtrasBaseModel):
+    """
+    Configuration for workflow settings.
+    """
+    override_existing_models: bool = Field(..., description="whether to train models for a date_suffix if one already exists")
 
 
 # ============================================================================

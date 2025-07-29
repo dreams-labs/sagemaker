@@ -7,6 +7,7 @@ import tempfile
 import os
 from pathlib import Path
 from dataclasses import dataclass
+import concurrent.futures
 import json
 import numpy as np
 import pandas as pd
@@ -309,18 +310,61 @@ class WalletWorkflowOrchestrator:
         return s3_uris
 
 
-    def run_training_pipeline(self):
+    def train_all_models(self):
         """
-        Trains models for all configured scenarios.
+        Train models for all loaded date suffixes using uploaded S3 data.
+
+        Returns:
+        - dict: Training results keyed by date suffix
         """
-        modeler = WalletModeler(self.wallets_config, self.training_data)
+        if not self.date_suffixes:
+            raise ValueError("No date suffixes available. Call load_all_training_data() first.")
+
+        # Get S3 URIs for all dates
+        s3_uris = self.retrieve_training_data_uris(self.date_suffixes)
+
+        training_results = {}
+        n_threads = self.wallets_config['n_threads']['train_all_models']
+
+        logger.info(f"Training models for {len(self.date_suffixes)} date periods with {n_threads} threads...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_date = {
+                executor.submit(self._train_single_model, date_suffix, s3_uris): date_suffix
+                for date_suffix in self.date_suffixes
+            }
+
+            for future in concurrent.futures.as_completed(future_to_date):
+                date_suffix = future_to_date[future]
+                result = future.result()
+                training_results[date_suffix] = result
+
+        logger.info(f"All {len(training_results)} models trained successfully.")
+        return training_results
 
 
-    def run_scoring_pipeline(self):
+    def _train_single_model(self, date_suffix: str, s3_uris: dict) -> dict:
         """
-        Scores all models from configured scenarios.
+        Train a model for a specific date suffix.
+
+        Params:
+        - date_suffix (str): Date suffix for this training run
+        - s3_uris (dict): S3 URIs for all date suffixes
+
+        Returns:
+        - dict: Training results for this date suffix
         """
-        pass
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris={date_suffix: s3_uris[date_suffix]},
+            override_approvals= self.wallets_config['workflow']['override_existing_models']
+        )
+
+        result = modeler.train_model()
+        logger.info(f"Successfully completed training for {date_suffix}")
+        return result
 
 
 

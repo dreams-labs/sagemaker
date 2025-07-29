@@ -17,6 +17,9 @@ preprocessing: #SageMaker
         transfers: -1
         transfers: 1
 
+workflow:
+    override_existing_models: True  # whether to train models for a date_suffix if one already exists
+
 aws: #SageMaker
     training_bucket: wallet-training-data
     preprocessed_directory: training-data-preprocessed
