@@ -14,7 +14,7 @@ target:
 
 training:
     model_type: classification  # regression or classification
-    eval_metric: auc_pr
+    eval_metric: aucpr
 
     #KeyParam Hyperparameters
     hyperparameters:
