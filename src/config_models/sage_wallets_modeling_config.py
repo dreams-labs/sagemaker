@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 class NoExtrasBaseModel(BaseModel):
     """Custom BaseModel to apply config settings globally."""
     model_config = {
-        "extra": "forbid",  # Prevent extra fields that are not defined
-        "str_max_length": 2000,    # Increase the max length of error message string representations
+        "extra": "forbid",      # Prevent extra fields that are not defined
+        "str_max_length": 2000, # Max length of error message strings
     }
 
 # ============================================================================
