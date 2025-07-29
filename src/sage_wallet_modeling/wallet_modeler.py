@@ -189,8 +189,8 @@ class WalletModeler:
 
         xgb_estimator = Estimator(
             image_uri=model_container,
-            instance_type=self.modeling_config['training']['instance_type'],
-            instance_count=self.modeling_config['training']['instance_count'],
+            instance_type=self.modeling_config['metaparams']['instance_type'],
+            instance_count=self.modeling_config['metaparams']['instance_count'],
             role=self.role,
             sagemaker_session=self.sagemaker_session,
             hyperparameters=self.modeling_config['training']['hyperparameters'],
@@ -362,8 +362,8 @@ class WalletModeler:
 
         transformer = Transformer(
             model_name=model_name,
-            instance_count=self.modeling_config['predicting']['instance_count'],
-            instance_type=self.modeling_config['predicting']['instance_type'],
+            instance_count=self.modeling_config['metaparams']['instance_count'],
+            instance_type=self.modeling_config['metaparams']['instance_type'],
             output_path=output_path,
             sagemaker_session=self.sagemaker_session
         )
@@ -616,8 +616,8 @@ class WalletModeler:
         # Deploy the model to a real-time endpoint
         logger.info(f"Deploying real-time endpoint: {endpoint_name}...")
         predictor = model.deploy(
-            initial_instance_count=self.modeling_config['predicting']['instance_count'],
-            instance_type=self.modeling_config['predicting']['instance_type'],
+            initial_instance_count=self.modeling_config['metaparams']['instance_count'],
+            instance_type=self.modeling_config['metaparams']['instance_type'],
             endpoint_name=endpoint_name
         )
 
