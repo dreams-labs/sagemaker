@@ -13,6 +13,9 @@ from typing import Dict,Optional
 from datetime import datetime
 import tarfile
 from pathlib import Path
+import json
+import tempfile
+import os
 import numpy as np
 import pandas as pd
 import boto3
@@ -131,7 +134,6 @@ class WalletModeler:
             s3_data=date_uris['train'],
             content_type='text/csv'
         )
-
         validation_input = TrainingInput(
             s3_data=date_uris['eval'],
             content_type='text/csv'
@@ -154,8 +156,9 @@ class WalletModeler:
             wait=True
         )
 
-        # Store training artifacts
+        # Save training metadata to S3
         self.model_uri = xgb_estimator.model_data
+        self._upload_training_artifacts(job_name)
 
         logger.info(f"Training completed. Model stored at: {self.model_uri}")
         u.notify('mellow_chime_005')
@@ -603,6 +606,110 @@ class WalletModeler:
                                   f"{self.date_suffix}")
 
         return date_uris
+
+
+
+
+
+    # ----------------------------
+    #       Metadata Methods
+    # ----------------------------
+
+    def _load_local_metadata(self) -> dict:
+        """Load metadata.json from local preprocessed data directory."""
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+                    / "wallet_training_data_preprocessed")
+
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        if self.dataset == 'dev':
+            local_dir = f"{local_dir}_dev"
+
+        metadata_path = base_dir / local_dir / self.date_suffix / "metadata.json"
+
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+
+    def _compile_training_metadata(self, training_job_name: str) -> dict:
+        """
+        Compile comprehensive training metadata including preprocessing info and training details.
+
+        Params:
+        - training_job_name (str): SageMaker training job name
+
+        Returns:
+        - dict: Complete training metadata for artifact storage
+        """
+        preprocessing_metadata = self._load_local_metadata()
+        timestamp = datetime.now().isoformat()
+
+        training_metadata = {
+            "training_job_info": {
+                "training_job_name": training_job_name,
+                "date_suffix": self.date_suffix,
+                "model_uri": self.model_uri,
+                "dataset": self.dataset,
+                "upload_directory": self.upload_directory,
+                "training_completed_at": timestamp,
+                "sagemaker_framework_version": self.modeling_config['framework']['version'],
+                "instance_type": self.modeling_config['metaparams']['instance_type'],
+                "instance_count": self.modeling_config['metaparams']['instance_count']
+            },
+            "full_configs": {
+                "wallets_config": self.wallets_config,
+                "modeling_config": self.modeling_config
+            },
+            "preprocessing_metadata": preprocessing_metadata,
+            "s3_training_data_uris": self.s3_uris[self.date_suffix] if self.s3_uris else None
+        }
+
+        return training_metadata
+
+
+    def _upload_training_artifacts(self, training_job_name: str):
+        """
+        Save training artifacts (metadata, configs) to S3 alongside the model.
+
+        Params:
+        - training_job_name (str): Name of the completed training job
+        """
+        # Compile complete training metadata
+        training_metadata = self._compile_training_metadata(training_job_name)
+
+        # Parse model URI to get the training job folder path
+        if not self.model_uri or not self.model_uri.startswith('s3://'):
+            raise ValueError(f"Invalid model URI for artifact storage: {self.model_uri}")
+
+        # Extract bucket and base path from model URI
+        # model_uri format: s3://bucket/sagemaker-models/upload-dir/job-name/output/model.tar.gz
+        uri_parts = self.model_uri.replace('s3://', '').split('/')
+        bucket_name = uri_parts[0]
+        job_folder_path = '/'.join(uri_parts[1:-2])  # Remove 'output/model.tar.gz'
+
+        # Upload training metadata
+        metadata_key = f"{job_folder_path}/training_metadata.json"
+        metadata_uri = f"s3://{bucket_name}/{metadata_key}"
+
+        s3_client = self.sagemaker_session.boto_session.client('s3')
+
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+                json.dump(training_metadata, tmp, indent=2)
+                temp_path = tmp.name
+
+            s3_client.upload_file(temp_path, bucket_name, metadata_key)
+            os.unlink(temp_path)
+
+            logger.info(f"Training artifacts saved to {metadata_uri}")
+
+        except ClientError as e:
+            logger.warning(f"Failed to save training artifacts: {e}")
+            # Don't fail the training job if artifact storage fails
+
+
 
 
 
