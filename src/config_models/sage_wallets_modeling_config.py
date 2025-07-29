@@ -46,12 +46,18 @@ class FrameworkConfig(BaseModel):
 
 # Metaparams section
 # ------------------
+class InstanceType(str, Enum):
+    """Supported AWS instance types."""
+    ML_M5_LARGE = "ml.m5.large"
 
 class MetaparamsConfig(BaseModel):
     """
     Configuration for metaparameters.
     """
     endpoint_preds_dir: str = Field(...)
+    instance_type: InstanceType = Field(...)
+    instance_count: int = Field(...)
+
 
     @field_validator('endpoint_preds_dir')
     @classmethod
@@ -68,18 +74,11 @@ class MetaparamsConfig(BaseModel):
 # Training section
 # ----------------
 
-class InstanceType(str, Enum):
-    """Supported AWS instance types."""
-    ML_M5_LARGE = "ml.m5.large"
-
 class TrainingConfig(NoExtrasBaseModel):
     """
     Configuration for training settings.
     """
-    instance_type: InstanceType = Field(...)
-    instance_count: int = Field(...)
     hyperparameters: dict = Field(...)
-
 
 # Predicting section
 # ------------------
@@ -93,8 +92,6 @@ class PredictingConfig(NoExtrasBaseModel):
     """
     Configuration for prediction settings.
     """
-    instance_type: InstanceType = Field(...)
-    instance_count: int = Field(...)
     predict_method: PredictMethod = Field(...)
 
 

@@ -5,11 +5,10 @@ framework:
 
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
-
-training:
     instance_type: ml.m5.large
     instance_count: 1
 
+training:
     #KeyParam Hyperparameters
     hyperparameters:
         objective: reg:linear
@@ -21,6 +20,4 @@ training:
         early_stopping_rounds: 10
 
 predicting:
-    instance_type: ml.m5.large
-    instance_count: 1
     predict_method: endpoint  # endpoint or batch_transform
