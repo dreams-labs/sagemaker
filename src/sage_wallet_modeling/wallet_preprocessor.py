@@ -26,12 +26,14 @@ class SageWalletsPreprocessor:
 
     def __init__(
             self,
-            sage_wallets_config: dict
+            sage_wallets_config: dict,
+            modeling_config: dict
         ):
         # Configs
         self.wallets_config = sage_wallets_config
+        self.modeling_config = modeling_config
         self.preprocessing_config = self.wallets_config['preprocessing']
-        self.dataset = self.wallets_config['training_data'].get('dataset', 'prod')
+        self.dataset = self.wallets_config['training_data'].get('dataset', 'dev')
 
         # Set up local output directory for this run
         base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
@@ -98,10 +100,11 @@ class SageWalletsPreprocessor:
                 )
 
             # Preprocess X data
-            x_processed = self._preprocess_x_data(training_data[x_split], x_split)
+            x_preprocessed = self._preprocess_x_data(training_data[x_split], x_split)
+            y_preprocessed = self._preprocess_y_data(training_data[y_split], y_split)
 
             # Combine X and y with target as first column
-            combined_data = self._combine_x_y_data(x_processed, training_data[y_split])
+            combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
 
             # Store combined data (no separate X/y anymore)
             processed_data[split_name] = combined_data
@@ -228,6 +231,57 @@ class SageWalletsPreprocessor:
         logger.info(f"Filled NaN values in {len(columns_with_na)} columns for {split_name}.")
 
         return df
+
+
+    def _preprocess_y_data(self, y_df: pd.DataFrame, split_name: str) -> pd.DataFrame:
+        """
+        Preprocess target data including classification threshold transformation if needed.
+
+        Params:
+        - y_df (DataFrame): Target variable DataFrame with single column
+        - split_name (str): Name of split for error reporting and logging
+
+        Returns:
+        - DataFrame: Preprocessed target data (continuous or binary based on model_type)
+        """
+        if len(y_df.columns) != 1:
+            raise ValueError(f"Target DataFrame should have exactly 1 column, "
+                            f"found {len(y_df.columns)} in {split_name}")
+
+        y_processed = y_df.copy()
+        model_type = self.modeling_config['training']['model_type']
+
+        # Apply classification threshold if needed
+        if model_type == 'classification':
+
+            # Convert continuous target to binary
+            threshold = self.modeling_config['target']['classification']['threshold']
+            original_values = y_processed.iloc[:, 0]
+            binary_values = (original_values > threshold).astype(int)
+            y_processed.iloc[:, 0] = binary_values
+
+            # Calculate and log class distribution
+            class_1_count = binary_values.sum()
+            class_0_count = len(binary_values) - class_1_count
+            class_1_pct = (class_1_count / len(binary_values)) * 100
+
+            logger.info(f"Applied classification threshold {threshold} to {split_name}: "
+                    f"{class_1_count:,} positive ({class_1_pct:.1f}%), "
+                    f"{class_0_count:,} negative ({100-class_1_pct:.1f}%)")
+            if class_1_pct < 5:
+                logger.warning(f"Class imbalance in {split_name} below 5%: "
+                        f"{class_1_pct:.1f}% positive class")
+
+        # For regression, just ensure numeric type
+        elif model_type == 'regression':
+            if not pd.api.types.is_numeric_dtype(y_processed.iloc[:, 0]):
+                raise ValueError(f"Target column must be numeric for regression")
+
+        # Convert to float32 for consistency with X data
+        y_processed = y_processed.astype('float32')
+
+        return y_processed
+
 
 
     def _validate_index_alignment(
