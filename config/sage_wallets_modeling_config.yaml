@@ -8,10 +8,16 @@ metaparams:
     instance_type: ml.m5.large
     instance_count: 1
 
+target:
+    classification:
+        threshold: 0.05  # if target > {threshold}, class = 1
+
 training:
+    model_type: classification  # regression or classification
+    eval_metric: auc_pr
+
     #KeyParam Hyperparameters
     hyperparameters:
-        objective: reg:linear
         num_round: 100
         max_depth: 6
         eta: 0.3

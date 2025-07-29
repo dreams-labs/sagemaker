@@ -170,7 +170,7 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"Preprocessing data for {date_suffix}...")
 
             # Initialize preprocessor for this date
-            preprocessor = SageWalletsPreprocessor(self.wallets_config)
+            preprocessor = SageWalletsPreprocessor(self.wallets_config, self.modeling_config)
 
             # Preprocess this date's data
             preprocessed_data = preprocessor.preprocess_training_data(date_data, date_suffix)
