@@ -11,7 +11,7 @@ class NoExtrasBaseModel(BaseModel):
     """Custom BaseModel to apply config settings globally."""
     model_config = {
         "extra": "forbid",  # Prevent extra fields that are not defined
-        "str_max_length": 2000,    # Increase the max length of error message string representation
+        "str_max_length": 2000,    # Increase the max length of error messages
     }
 
 # ============================================================================
@@ -22,12 +22,13 @@ class SageWalletsConfig(NoExtrasBaseModel):
     """Top-level structure of the main sagemaker_config.yaml file."""
     training_data: 'TrainingDataConfig' = Field(...)
     preprocessing: 'PreprocessingConfig' = Field(...)
+    workflow: 'WorkflowConfig' = Field(...)
     aws: 'AWSConfig' = Field(...)
+    n_threads: 'NThreadsConfig' = Field(...)
 
 
 # Training Data section
 # ---------------------
-
 class TrainingDataConfig(BaseModel):
     """
     Configuration for training data settings.
@@ -50,9 +51,9 @@ class TrainingDataConfig(BaseModel):
     def validate_upload_directory(cls, v):
         """
         Validates that the upload_directory string doesn't exceed 20 characters. This
-        param flows through as a filename component throughout the modeling process
-        and a limit of 20 ensures that the SageMaker CreateTrainingJob operation
-        doesn't fail because of a job name that exceeds the hard cap of 64 characters.
+         param flows through as a filename component throughout the modeling process
+         and a limit of 20 ensures that the SageMaker CreateTrainingJob operation
+         doesn't fail because of a job name that exceeds the hard cap of 64 characters.
         """
         if '_' in v:
             raise ValueError(f"Invalid upload_directory value '{v}' contains underscores. "
@@ -67,7 +68,6 @@ class TrainingDataConfig(BaseModel):
 
 # Preprocessing section
 # ---------------------
-
 class FillNaMethod(str, Enum):
     """Valid fill_na method values."""
     MIN = "min"
@@ -93,13 +93,13 @@ class PreprocessingConfig(NoExtrasBaseModel):
                     raise ValueError(f"Invalid fill_na method for '{key}': '{value}'. "
                                    "Must be numeric or one of: min, max, mean, median")
             else:
-                raise ValueError(f"fill_na value for '{key}' must be numeric or string, got {type(value)}")
+                raise ValueError(f"fill_na value for '{key}' must be numeric or "
+                                 f"string, got {type(value)}")
         return v
 
 
 # AWS section
 # -----------
-
 class AWSConfig(NoExtrasBaseModel):
     """
     Configuration for AWS settings.
@@ -109,8 +109,27 @@ class AWSConfig(NoExtrasBaseModel):
     modeler_arn: str = Field(...)
 
 
+# NThreads section
+# ----------------
+class NThreadsConfig(NoExtrasBaseModel):
+    """
+    Configuration for SageMaker threading settings.
+    """
+    train_all_models: int = Field(...)
+
+
+# Workflow section
+# ----------------
+class WorkflowConfig(NoExtrasBaseModel):
+    """
+    Configuration for workflow settings.
+    """
+    override_existing_models: bool = Field(..., description="whether to train models for a date_suffix if one already exists")
+
+
 # ============================================================================
 # Model Rebuilding
 # ============================================================================
-# Ensures all classes are fully reflected in structure regardless of the order they were defined
+# Ensures all classes are fully reflected in structure regardless of the order
+#  they were defined.
 SageWalletsConfig.model_rebuild()
