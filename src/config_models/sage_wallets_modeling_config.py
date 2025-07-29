@@ -84,6 +84,7 @@ class TrainingConfig(NoExtrasBaseModel):
     model_type: 'ModelType' = Field(
         ..., description="Type of model: 'regression' or 'classification'"
     )
+    eval_metric: str = Field(...)
     hyperparameters: dict = Field(...)
 
 
