@@ -33,6 +33,7 @@ from sagemaker.deserializers import JSONDeserializer
 import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
+import sage_utils.s3_utils as s3u
 
 
 # Set up logger at the module level
@@ -255,6 +256,7 @@ class WalletModeler:
         Returns:
         - dict: Contains transform job name and output S3 URI
         """
+        # Validate URIs
         if not self.model_uri:
             raise ValueError("No trained model available. Call train_model() or "
                             "load_existing_model() first.")
@@ -263,12 +265,17 @@ class WalletModeler:
             raise ConfigError("No S3 URIs available. Ensure training data has been configured.")
 
         date_uris = self.s3_uris[self.date_suffix]
-
         if dataset_type not in date_uris:
             raise FileNotFoundError(f"{dataset_type} data URI not found for date {self.date_suffix}")
 
+        # Identify model name (i.e. the directory preceding '/output/model.tar.gz')
+        if not self.model_uri.endswith('/output/model.tar.gz'):
+            raise ValueError(f"Expected model URI to end with '/output/model.tar.gz', "
+                             f"got: {self.model_uri}")
+        model_name = self.model_uri.split('/')[-3]
+
         # Setup model for batch transform
-        model_name = self._setup_model_for_batch_transform()
+        self._setup_model_for_batch_transform(model_name)
 
         # Execute batch transform on specified dataset
         dataset_uri = date_uris[dataset_type]
@@ -663,12 +670,13 @@ class WalletModeler:
     #     Batch Transform Helpers
     # -------------------------------
 
-    def _setup_model_for_batch_transform(self):
+    def _setup_model_for_batch_transform(self, model_name: str):
         """
         Create and register SageMaker model for batch transform jobs.
 
-        Returns:
-        - str: Name of the registered SageMaker model
+        Params:
+        - model_name (str): the name of the trained model, which is passed through
+            as the name of the scoring model instance
         """
         # Retrieve XGBoost container image
         xgb_container = sagemaker.image_uris.retrieve(
@@ -677,34 +685,32 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        # Model name is the directory preceding '/model.tar.gz'
-        if not self.model_uri.endswith('/output/model.tar.gz'):
-            raise ValueError(f"Expected model URI to end with '/output/model.tar.gz', "
-                             f"got: {self.model_uri}")
-        scoring_model_name = self.model_uri.split('/')[-3]
-
         # Create SageMaker model
         scoring_model = Model(
             image_uri=xgb_container,
             model_data=self.model_uri,
             role=self.role,
             sagemaker_session=self.sagemaker_session,
-            name=scoring_model_name
+            name=model_name
         )
 
         # Register model in SageMaker
         scoring_model.create()
 
-        return scoring_model_name
 
-
-    def _execute_batch_transform(self, dataset_uri: str, model_name: str):
+    def _execute_batch_transform(
+            self,
+            dataset_uri: str,
+            model_name: str,
+            override_existing: bool = False
+        ):
         """
         Execute batch transform job for specified dataset URI.
 
         Params:
         - dataset_uri (str): S3 URI of dataset to score
         - model_name (str): Name of registered SageMaker model
+        - override_existing (bool): Whether to overwrite existing output files
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -718,6 +724,23 @@ class WalletModeler:
                     f"{self.upload_directory}/"
                     f"{self.date_suffix}/"
                     f"{job_name}")
+
+        # Check if output already exists
+        predictions_uri = f"{output_path}/{dataset_uri.split('/')[-1]}.out"
+
+        if s3u.check_if_uri_exists(predictions_uri):
+            # File exists
+            if not override_existing:
+                logger.info(f"Output already exists at: {predictions_uri}. Using existing file.")
+                self.predictions_uri = predictions_uri
+                return {
+                    'transform_job_name': None,
+                    'predictions_uri': predictions_uri,
+                    'input_data_uri': dataset_uri,
+                    'status': 'existing_file_used'
+                }
+            else:
+                logger.warning(f"Output exists at: {predictions_uri}. Overwriting...")
 
         transformer = Transformer(
             model_name=model_name,
@@ -742,7 +765,6 @@ class WalletModeler:
         )
 
         # Store predictions URI
-        predictions_uri = f"{output_path}/{dataset_uri.split('/')[-1]}.out"
         self.predictions_uri = predictions_uri
 
         logger.info(f"Batch transform completed. Predictions at: {predictions_uri}")
@@ -753,7 +775,6 @@ class WalletModeler:
             'input_data_uri': dataset_uri
         }
         return result
-
 
 
     # -------------------------------
