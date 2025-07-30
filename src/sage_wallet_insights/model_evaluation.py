@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 from typing import Tuple,Union
-import numpy as np
 import pandas as pd
 
 # Add wallet_insights to path    # pylint:disable=wrong-import-position
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
+from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
 import wallet_insights.model_evaluation as wime
 from utils import ConfigError
 
@@ -155,6 +155,10 @@ def create_sagemaker_evaluator(
     Returns:
     - RegressorEvaluator: Configured evaluator ready for analysis
     """
+    # 1. Load and Prepare Training Data
+    # ---------------------------------
+    model_type = sage_wallets_modeling_config['training']['model_type']
+
     # Load remaining training data
     training_data_path = (
         Path(f"{sage_wallets_config['training_data']['local_s3_root']}")
@@ -173,13 +177,12 @@ def create_sagemaker_evaluator(
     y_test_pred = assign_index_to_pred(y_test_pred,y_test)
     y_val_pred = assign_index_to_pred(y_val_pred,y_val)
 
-    # Create model_id and modeling_config
-    model_id = f"sagemaker_{sage_wallets_config['training_data']['local_directory']}_{date_suffix}"
 
-    target_variable = y_train.columns[0]
-    model_type = sage_wallets_modeling_config['training']['model_type']
-    modeling_config = {
-        'target_variable': target_variable,
+    # 2. Prepare wime modeling config
+    # -------------------------------
+    # Create modeling_config in format expected by wallet_insights.model_evaluation
+    wime_modeling_config = {
+        'target_variable': y_train.columns[0],
         'model_type': model_type,
         'returns_winsorization': 0.005,
         'training_data': {
@@ -191,29 +194,47 @@ def create_sagemaker_evaluator(
         }
     }
 
-    # Include y_pred_threshold for classification models
+    # 3. Handle classification vars
+    # -----------------------------
     if model_type == 'classification':
-        y_pred_thresh = sage_wallets_modeling_config['target']['classification']['threshold']
-        modeling_config['y_pred_threshold'] = y_pred_thresh
+        # Add y_pred_theshold to config
+        y_pred_thresh = sage_wallets_modeling_config['predicting']['y_pred_threshold']
+        wime_modeling_config['y_pred_threshold'] = y_pred_thresh
 
-    # Create wallet_model_results dictionary
+        # Convert to binary for classification models
+        preprocessor = SageWalletsPreprocessor(sage_wallets_config, sage_wallets_modeling_config)
+        y_train = preprocessor.preprocess_y_data(y_train, 'train')
+        y_test = preprocessor.preprocess_y_data(y_test, 'test')
+        y_pred_proba = y_test_pred
+        y_val = preprocessor.preprocess_y_data(y_val, 'val')
+        y_val_pred_proba = y_val_pred
+
+        # Apply y_pred_threshold to convert probabilities to binary predictions
+        y_test_pred = (y_test_pred > y_pred_thresh).astype(int)
+        y_val_pred = (y_val_pred > y_pred_thresh).astype(int)
+
+    # 4. Prepare model results
+    # ------------------------
+    # Create model_id
+    model_id = f"sagemaker_{sage_wallets_config['training_data']['local_directory']}_{date_suffix}"
+
     wallet_model_results = {
         'model_id': model_id,
-        'modeling_config': modeling_config,
+        'modeling_config': wime_modeling_config,
         'model_type': model_type,
 
         # Training data
         'X_train': X_train,
         'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
+        'y_train': y_train.iloc[:, 0],
+        'y_test': y_test.iloc[:, 0],
         'y_pred': y_test_pred,
         'training_cohort_pred': None,
         'training_cohort_actuals': None,
 
         # Validation data
         'X_validation': X_val,
-        'y_validation': y_val,
+        'y_validation': y_val.iloc[:, 0],
         'y_validation_pred': y_val_pred,
         'validation_target_vars_df': y_val,
 
@@ -221,7 +242,12 @@ def create_sagemaker_evaluator(
         'pipeline': create_mock_pipeline()
     }
 
-    # Create and return evaluator
+    if model_type == 'classification':
+        wallet_model_results['y_pred_proba'] = y_pred_proba
+        wallet_model_results['y_validation_pred_proba'] = y_val_pred_proba
+
+    # 5. Create and return evaluator
+    # ------------------------------
     if model_type == 'regression':
         wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
     elif model_type == 'classification':
@@ -261,7 +287,8 @@ def assign_index_to_pred(
 
     # Validate single column
     if len(actuals_df.columns) != 1:
-        raise ValueError(f"DataFrame must have exactly 1 column, found {len(actuals_df.columns)}: {actuals_df.columns.tolist()}")
+        raise ValueError(f"DataFrame must have exactly 1 column, found "
+                         f"{len(actuals_df.columns)}: {actuals_df.columns.tolist()}")
 
     # Extract the series from DataFrame
     actuals_series = actuals_df.iloc[:, 0]
@@ -285,7 +312,7 @@ def assign_index_to_pred(
 
 def create_mock_pipeline():
     """
-    Create a mock pipeline for SageMaker evaluation compatibility.
+    Create a mock pipeline for wime evaluation compatibility.
 
     Params:
     - objective (str): XGBoost objective parameter

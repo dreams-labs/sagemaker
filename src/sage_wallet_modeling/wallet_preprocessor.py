@@ -106,7 +106,7 @@ class SageWalletsPreprocessor:
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
                 # Train and Eval sets need the target var appended as first column
-                y_preprocessed = self._preprocess_y_data(training_data[y_split], y_split)
+                y_preprocessed = self.preprocess_y_data(training_data[y_split], y_split)
                 combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
                 processed_data[split_name] = combined_data
             else:
@@ -237,9 +237,11 @@ class SageWalletsPreprocessor:
         return df
 
 
-    def _preprocess_y_data(self, y_df: pd.DataFrame, split_name: str) -> pd.DataFrame:
+    def preprocess_y_data(self, y_df: pd.DataFrame, split_name: str) -> pd.DataFrame:
         """
         Preprocess target data including classification threshold transformation if needed.
+
+        Also used in model_evaluation.py.
 
         Params:
         - y_df (DataFrame): Target variable DataFrame with single column

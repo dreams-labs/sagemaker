@@ -27,3 +27,4 @@ training:
 
 predicting:
     predict_method: endpoint  # endpoint or batch_transform
+    y_pred_threshold: 0.5 # predictions above this are positive
