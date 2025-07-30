@@ -7,8 +7,9 @@ logs/notebook_logs.log
 # this is just a symlink to the real file in data-science/src/utils.py
 src/utils.py
 
-# ignore everything in loading queue
+# ignore everything in local S3 directories
 s3_uploads/*
+s3_downloads/*
 
 # don't upload the actual models
 models/*

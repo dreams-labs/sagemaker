@@ -246,12 +246,18 @@ class WalletModeler:
         }
 
 
-    def predict_with_batch_transform(self, dataset_type: str = 'val'):
+    def predict_with_batch_transform(
+            self,
+            dataset_type: str = 'val',
+            download_preds: bool = True
+        ):
         """
         Score specified dataset using trained model via SageMaker batch transform.
 
         Params:
         - dataset_type (str): Type of dataset to score ('val' or 'test')
+        - download_preds (bool): Whether to download the predictions to the local
+            s3_downloads directory
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -280,6 +286,10 @@ class WalletModeler:
         # Execute batch transform on specified dataset
         dataset_uri = date_uris[dataset_type]
         result = self._execute_batch_transform(dataset_uri, model_name)
+
+        # Download if configured
+        if download_preds:
+            self._download_batch_transform_preds(result['predictions_uri'], dataset_type)
 
         return result
 
@@ -776,6 +786,32 @@ class WalletModeler:
             'input_data_uri': dataset_uri
         }
         return result
+
+
+    def _download_batch_transform_preds(self, predictions_uri: str, dataset_type: str) -> str:
+        """
+        Download batch transform predictions to standardized local path.
+
+        Params:
+        - predictions_uri (str): S3 URI of predictions file
+        - dataset_type (str): Type of dataset ('val' or 'test')
+
+        Returns:
+        - str: Local file path where predictions were downloaded
+        """
+        # Construct standardized local path
+        local_path = (f"{self.wallets_config['training_data']['local_s3_root']}/"
+                      f"s3_downloads/wallet_predictions/"
+                      f"{self.wallets_config['training_data']['local_directory']}/"
+                      f"{self.date_suffix}/"
+                      f"{dataset_type}.csv.out")
+
+        # Use generic utility to download
+        downloaded_path = s3u.download_from_uri(predictions_uri, local_path)
+
+        logger.info(f"Downloaded {dataset_type} predictions to: {downloaded_path}")
+
+        return downloaded_path
 
 
     # -------------------------------
