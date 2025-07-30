@@ -100,6 +100,7 @@ class PredictingConfig(NoExtrasBaseModel):
     Configuration for prediction settings.
     """
     predict_method: PredictMethod = Field(...)
+    y_pred_threshold: float = Field(...)
 
 
 # [Target]
