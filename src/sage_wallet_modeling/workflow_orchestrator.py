@@ -238,40 +238,6 @@ class WalletWorkflowOrchestrator:
         return upload_results
 
 
-    def _upload_single_date(self, date_suffix: str, preprocessed_data: dict, context: UploadContext) -> dict:
-        """
-        Upload all files for a single date suffix to S3.
-
-        Params:
-        - date_suffix (str): Date suffix for this upload
-        - preprocessed_data (dict): Preprocessed data for this date
-        - context (UploadContext): Upload configuration and metadata
-
-        Returns:
-        - dict: S3 URIs for all uploaded files for this date
-        """
-        s3_client = boto3.client('s3')
-
-        # Upload CSV splits for this date
-        date_uris = self._upload_csv_files(
-            date_suffix,
-            preprocessed_data,
-            context,
-            s3_client
-        )
-
-        # Upload metadata for this date
-        metadata_uri = self._upload_metadata_for_date(
-            date_suffix,
-            preprocessed_data['metadata'],
-            context,
-            s3_client
-        )
-        date_uris['metadata'] = metadata_uri
-
-        logger.info(f"Successfully completed upload for {date_suffix}")
-        return date_uris
-
 
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
@@ -377,31 +343,6 @@ class WalletWorkflowOrchestrator:
 
         logger.info(f"All {len(training_results)} models trained successfully.")
         return training_results
-
-
-    def _train_single_model(self, date_suffix: str, s3_uris: dict) -> dict:
-        """
-        Train a model for a specific date suffix.
-
-        Params:
-        - date_suffix (str): Date suffix for this training run
-        - s3_uris (dict): S3 URIs for all date suffixes
-
-        Returns:
-        - dict: Training results for this date suffix
-        """
-        modeler = WalletModeler(
-            wallets_config=self.wallets_config,
-            modeling_config=self.modeling_config,
-            date_suffix=date_suffix,
-            s3_uris={date_suffix: s3_uris[date_suffix]},
-            override_approvals= self.wallets_config['workflow']['override_existing_models']
-        )
-
-        result = modeler.train_model()
-        logger.info(f"Successfully completed training for {date_suffix}")
-        return result
-
 
 
 
@@ -568,6 +509,47 @@ class WalletWorkflowOrchestrator:
         return data
 
 
+    def _upload_single_date(
+            self,
+            date_suffix: str,
+            preprocessed_data: dict,
+            context: UploadContext
+        ) -> dict:
+        """
+        Coordinates the upload of all files for a single date suffix to S3.
+
+        Params:
+        - date_suffix (str): Date suffix for this upload
+        - preprocessed_data (dict): Preprocessed data for this date
+        - context (UploadContext): Upload configuration and metadata
+
+        Returns:
+        - dict: S3 URIs for all uploaded files for this date
+        """
+        s3_client = boto3.client('s3')
+
+        # Upload CSV splits for this date
+        date_uris = self._upload_csv_files(
+            date_suffix,
+            preprocessed_data,
+            context,
+            s3_client
+        )
+
+        # Upload metadata for this date
+        metadata_uri = self._upload_metadata_for_date(
+            date_suffix,
+            preprocessed_data['metadata'],
+            context,
+            s3_client
+        )
+        date_uris['metadata'] = metadata_uri
+
+        logger.info(f"Successfully completed upload for {date_suffix}")
+        return date_uris
+
+
+
     def _validate_data_folder(self):
         """
         Validates that data folder exists and contains required parquet files.
@@ -709,6 +691,7 @@ class WalletWorkflowOrchestrator:
 
         return date_uris
 
+
     def _upload_metadata_for_date(
         self,
         date_suffix: str,
@@ -740,3 +723,28 @@ class WalletWorkflowOrchestrator:
         os.unlink(temp_path)
         logger.info(f"Uploaded metadata to {s3_uri}")
         return s3_uri
+
+
+    def _train_single_model(self, date_suffix: str, s3_uris: dict) -> dict:
+        """
+        Train a model for a specific date suffix.
+
+        Params:
+        - date_suffix (str): Date suffix for this training run
+        - s3_uris (dict): S3 URIs for all date suffixes
+
+        Returns:
+        - dict: Training results for this date suffix
+        """
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris={date_suffix: s3_uris[date_suffix]},
+            override_approvals= self.wallets_config['workflow']['override_existing_models']
+        )
+
+        result = modeler.train_model()
+        logger.info(f"Successfully completed training for {date_suffix}")
+        return result
+
