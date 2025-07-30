@@ -245,86 +245,36 @@ class WalletModeler:
         }
 
 
-    def predict_with_batch_transform(self):
+    def predict_with_batch_transform(self, dataset_type: str = 'val'):
         """
-        Score validation data using trained model via SageMaker batch transform.
+        Score specified dataset using trained model via SageMaker batch transform.
+
+        Params:
+        - dataset_type (str): Type of dataset to score ('val' or 'test')
 
         Returns:
         - dict: Contains transform job name and output S3 URI
         """
         if not self.model_uri:
             raise ValueError("No trained model available. Call train_model() or "
-                             "load_existing_model() first.")
+                            "load_existing_model() first.")
 
-        # Use date_suffix from instance variable
         if not self.s3_uris:
             raise ConfigError("No S3 URIs available. Ensure training data has been configured.")
 
-        date_suffix = self.date_suffix
-        date_uris = self.s3_uris[date_suffix]
+        date_uris = self.s3_uris[self.date_suffix]
 
-        if 'val' not in date_uris:
-            raise FileNotFoundError(f"Validation data URI not found for date {date_suffix}")
+        if dataset_type not in date_uris:
+            raise FileNotFoundError(f"{dataset_type} data URI not found for date {self.date_suffix}")
 
-        # Create model for batch transform
-        xgb_container = sagemaker.image_uris.retrieve(
-            framework=self.modeling_config['framework']['name'],
-            region=self.sagemaker_session.boto_region_name,
-            version=self.modeling_config['framework']['version']
-        )
+        # Setup model for batch transform
+        model_name = self._setup_model_for_batch_transform()
 
-        model_name = f"wallet-model-{self.upload_directory}"
+        # Execute batch transform on specified dataset
+        dataset_uri = date_uris[dataset_type]
+        result = self._execute_batch_transform(dataset_uri, model_name)
 
-        model = Model(
-            image_uri=xgb_container,
-            model_data=self.model_uri,
-            role=self.role,
-            sagemaker_session=self.sagemaker_session,
-            name=model_name
-        )
-
-        # Register model in SageMaker
-        model.create()
-
-        # Configure batch transform job
-        timestamp = datetime.now().strftime("%H%M%S")
-        job_name = f"wallet-scoring-{date_suffix}-{timestamp}"
-
-        output_path = f"s3://{self.wallets_config['aws']['training_bucket']}/validation-data-scored/"
-
-        transformer = Transformer(
-            model_name=model_name,
-            instance_count=self.modeling_config['metaparams']['instance_count'],
-            instance_type=self.modeling_config['metaparams']['instance_type'],
-            output_path=output_path,
-            sagemaker_session=self.sagemaker_session
-        )
-
-        # Deploy model if needed
-        logger.info(f"Starting batch transform job: {job_name}")
-        logger.info(f"Using model: {model_name}")
-        logger.info(f"Input data: {date_uris['val']}")
-        logger.info(f"Output path: {output_path}")
-
-        # Start batch transform
-        transformer.transform(
-            data=date_uris['val'],
-            content_type='text/csv',
-            split_type='Line',
-            job_name=job_name,
-            wait=True
-        )
-
-        # Store predictions URI
-        self.predictions_uri = f"{output_path}{job_name}/{date_uris['val'].split('/')[-1]}.out"
-
-        logger.info(f"Batch transform completed. Predictions at: {self.predictions_uri}")
-
-        return {
-            'transform_job_name': job_name,
-            'predictions_uri': self.predictions_uri,
-            'input_data_uri': date_uris['val']
-        }
+        return result
 
 
     def download_existing_model(self) -> str:
@@ -609,11 +559,8 @@ class WalletModeler:
 
 
 
-
-
-    # ----------------------------
-    #       Metadata Methods
-    # ----------------------------
+    # Training Metadata Methods
+    # -------------------------
 
     def _load_local_metadata(self) -> dict:
         """Load metadata.json from local preprocessed data directory."""
@@ -710,6 +657,99 @@ class WalletModeler:
             # Don't fail the training job if artifact storage fails
 
 
+
+
+    # -------------------------------
+    #     Batch Transform Helpers
+    # -------------------------------
+
+    def _setup_model_for_batch_transform(self):
+        """
+        Create and register SageMaker model for batch transform jobs.
+
+        Returns:
+        - str: Name of the registered SageMaker model
+        """
+        # Retrieve XGBoost container image
+        xgb_container = sagemaker.image_uris.retrieve(
+            framework=self.modeling_config['framework']['name'],
+            region=self.sagemaker_session.boto_region_name,
+            version=self.modeling_config['framework']['version']
+        )
+
+        # Create unique model name
+        model_name = f"wallet-model-{self.upload_directory}"
+
+        # Create SageMaker model
+        model = Model(
+            image_uri=xgb_container,
+            model_data=self.model_uri,
+            role=self.role,
+            sagemaker_session=self.sagemaker_session,
+            name=model_name
+        )
+
+        # Register model in SageMaker
+        model.create()
+
+        return model_name
+
+
+    def _execute_batch_transform(self, dataset_uri: str, model_name: str):
+        """
+        Execute batch transform job for specified dataset URI.
+
+        Params:
+        - dataset_uri (str): S3 URI of dataset to score
+        - model_name (str): Name of registered SageMaker model
+
+        Returns:
+        - dict: Contains transform job name and output S3 URI
+        """
+        # Configure batch transform job
+        timestamp = datetime.now().strftime("%H%M%S")
+        job_name = f"wallet-scoring-{self.date_suffix}-{timestamp}"
+
+        output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
+                    f"validation-data-scored/"
+                    f"{self.upload_directory}/"
+                    f"{self.date_suffix}/"
+                    f"{job_name}")
+
+        transformer = Transformer(
+            model_name=model_name,
+            instance_count=self.modeling_config['metaparams']['instance_count'],
+            instance_type=self.modeling_config['metaparams']['instance_type'],
+            output_path=output_path,
+            sagemaker_session=self.sagemaker_session
+        )
+
+        # Execute batch transform
+        logger.info(f"Starting batch transform job: {job_name}")
+        logger.info(f"Using model: {model_name}")
+        logger.info(f"Input data: {dataset_uri}")
+        logger.info(f"Output path: {output_path}")
+
+        transformer.transform(
+            data=dataset_uri,
+            content_type='text/csv',
+            split_type='Line',
+            job_name=job_name,
+            wait=True
+        )
+
+        # Store predictions URI
+        predictions_uri = f"{output_path}/{dataset_uri.split('/')[-1]}.out"
+        self.predictions_uri = predictions_uri
+
+        logger.info(f"Batch transform completed. Predictions at: {predictions_uri}")
+
+        result = {
+            'transform_job_name': job_name,
+            'predictions_uri': predictions_uri,
+            'input_data_uri': dataset_uri
+        }
+        return result
 
 
 
