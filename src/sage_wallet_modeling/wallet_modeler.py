@@ -571,7 +571,8 @@ class WalletModeler:
 
     def _load_local_metadata(self) -> dict:
         """Load metadata.json from local preprocessed data directory."""
-        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_root']}")
+                    / "s3_uploads"
                     / "wallet_training_data_preprocessed")
 
         local_dir = self.wallets_config["training_data"]["local_directory"]

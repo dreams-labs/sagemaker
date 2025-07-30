@@ -410,7 +410,8 @@ class WalletWorkflowOrchestrator:
         between saved files and uploaded data.
         """
         # Get the preprocessed data directory from SageWalletsPreprocessor logic
-        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_root']}")
+                    / "s3_uploads"
                     / "wallet_training_data_preprocessed")
         local_dir = self.wallets_config["training_data"]["local_directory"]
         if self.dataset == 'dev':

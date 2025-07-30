@@ -1,7 +1,7 @@
 #SageMaker Config
 
 training_data: #SageMaker
-    local_s3_uploads_root: ../s3_uploads
+    local_s3_root: ../  # where s3_uploads and s3_downloads exist
     local_directory: dda_897_td_column_ordering_v1  # where to load local csvs from
     upload_directory: dda-899-classifier  # new S3 folder name in bucket training_data_processed
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
