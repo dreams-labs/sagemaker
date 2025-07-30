@@ -101,19 +101,22 @@ class SageWalletsPreprocessor:
 
             # Preprocess X data
             x_preprocessed = self._preprocess_x_data(training_data[x_split], x_split)
-            y_preprocessed = self._preprocess_y_data(training_data[y_split], y_split)
 
-            # Combine X and y with target as first column
-            combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
-
-            # Store combined data (no separate X/y anymore)
-            processed_data[split_name] = combined_data
+            # Store preprocessed data in our results dict
+            if split_name in ['train', 'eval']:
+                # Train and Eval sets need the target var appended as first column
+                y_preprocessed = self._preprocess_y_data(training_data[y_split], y_split)
+                combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
+                processed_data[split_name] = combined_data
+            else:
+                # Test and Val sets are only used for scoring, and shouldn't have targets
+                processed_data[split_name] = x_preprocessed
 
             # Save preprocessed split to local file
-            self._save_preprocessed_df(combined_data, split_name)
+            self._save_preprocessed_df(processed_data[split_name], split_name)
 
-            logger.info(f"Preprocessed {split_name}: {combined_data.shape[0]:,} rows "
-                        f"× {combined_data.shape[1]} cols.")
+            logger.info(f"Preprocessed {split_name}: {processed_data[split_name].shape[0]:,} rows "
+                        f"× {processed_data[split_name].shape[1]} cols.")
 
         # Save metadata alongside CSV files
         processed_data['metadata'] = self._compile_training_metadata(training_data)
