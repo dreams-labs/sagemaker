@@ -183,23 +183,73 @@ def run_sagemaker_evaluation(
     sage_wallets_modeling_config: dict,
     date_suffix: str
 ) -> wime.RegressorEvaluator:
+
+
+# --------------------------
+#      Utility Functions
+# --------------------------
+
+def assign_index_to_pred(
+        pred_series: pd.Series,
+        actuals_df: pd.DataFrame
+    ) -> pd.Series:
     """
     Complete SageMaker evaluation pipeline: load data, create evaluator, run reports.
+    Convert prediction series to Series with validated index alignment from actuals.
 
     Params:
-    - sage_wallets_config (dict): Configuration for training data paths
-    - sage_wallets_modeling_config (dict): Configuration for model parameters
-    - date_suffix (str): Date suffix for file naming
+    - pred_series (Series): Predictions from model
+    - actuals_df (DataFrame): Corresponding actuals DataFrame with target index
 
     Returns:
-    - RegressorEvaluator: Evaluator after running summary report and plots
+    - pred_series (Series): Predictions with aligned index
     """
-    wallet_evaluator = create_sagemaker_evaluator(
-        sage_wallets_config, sage_wallets_modeling_config, date_suffix
-    )
+    # Validate input types
+    if not isinstance(pred_series, pd.Series):
+        raise TypeError(f"Expected Series for pred_series, got {type(pred_series)}")
 
-    # Run evaluation
-    wallet_evaluator.summary_report()
-    wallet_evaluator.plot_wallet_evaluation()
+    if not isinstance(actuals_df, pd.DataFrame):
+        raise TypeError(f"Expected DataFrame for actuals_df, got {type(actuals_df)}")
 
-    return wallet_evaluator
+    # Validate single column
+    if len(actuals_df.columns) != 1:
+        raise ValueError(f"DataFrame must have exactly 1 column, found {len(actuals_df.columns)}: {actuals_df.columns.tolist()}")
+
+    # Extract the series from DataFrame
+    actuals_series = actuals_df.iloc[:, 0]
+
+    # Validate lengths
+    if len(pred_series) != len(actuals_series):
+        raise ValueError(f"Length of y_pred ({len(pred_series)}) does "
+                        f"not match length of y_true ({len(actuals_series)}).")
+
+    # Create new series with aligned index using raw values
+    aligned_pred_series = pd.Series(pred_series.values, index=actuals_series.index)
+
+    # Check for NaN values
+    if aligned_pred_series.isna().any():
+        nan_count = aligned_pred_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in predictions.")
+
+    return aligned_pred_series
+
+
+
+def create_mock_pipeline():
+    """
+    Create a mock pipeline for SageMaker evaluation compatibility.
+
+    Params:
+    - objective (str): XGBoost objective parameter
+
+    Returns:
+    - Mock pipeline object with required methods
+    """
+    return type('MockPipeline', (), {
+        'named_steps': {'estimator': type('MockModel', (), {
+            'get_params': lambda self: {'objective': 'mock_objective'}
+        })()},
+        '__getitem__': lambda self, key: type('MockTransformer', (), {
+            'transform': lambda self, X: X
+        })()
+    })()
