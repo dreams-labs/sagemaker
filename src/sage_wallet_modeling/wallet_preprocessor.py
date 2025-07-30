@@ -36,7 +36,8 @@ class SageWalletsPreprocessor:
         self.dataset = self.wallets_config['training_data'].get('dataset', 'dev')
 
         # Set up local output directory for this run
-        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_uploads_root']}")
+        base_dir = (Path(f"{self.wallets_config['training_data']['local_s3_root']}")
+                    / "s3_uploads"
                     / "wallet_training_data_preprocessed")
         if not base_dir.exists():
             raise FileNotFoundError(f"Expected preprocessed data base directory not found: {base_dir}")

@@ -1,7 +1,13 @@
 # utilities/s3_utils.py
 
+import os
+import logging
 import boto3
 from botocore.exceptions import ClientError
+
+# Set up logger at the module level
+logger = logging.getLogger(__name__)
+
 
 # -------------------------
 #     S3 Utilities
@@ -36,3 +42,28 @@ def check_if_uri_exists(s3_uri: str) -> bool:
         else:
             # Re-raise other errors (permissions, etc.)
             raise
+
+
+def download_from_uri(uri: str, local_path: str) -> str:
+    """
+    Download file from S3 URI to specified local path.
+
+    Params:
+    - uri (str): S3 URI of file to download
+    - local_path (str): Local file path where file should be saved
+    """
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+    # Parse S3 URI
+    if not uri.startswith('s3://'):
+        raise ValueError(f"Invalid S3 URI format: {uri}")
+
+    uri_parts = uri.replace('s3://', '').split('/', 1)
+    bucket_name = uri_parts[0]
+    object_key = uri_parts[1] if len(uri_parts) > 1 else ''
+
+    # Download file
+    s3_client = boto3.client('s3')
+    s3_client.download_file(bucket_name, object_key, local_path)
+    logger.info(f"Stored file at {local_path}.")
