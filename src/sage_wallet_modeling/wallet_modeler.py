@@ -677,22 +677,25 @@ class WalletModeler:
             version=self.modeling_config['framework']['version']
         )
 
-        # Create unique model name
-        model_name = f"wallet-model-{self.upload_directory}"
+        # Model name is the directory preceding '/model.tar.gz'
+        if not self.model_uri.endswith('/output/model.tar.gz'):
+            raise ValueError(f"Expected model URI to end with '/output/model.tar.gz', "
+                             f"got: {self.model_uri}")
+        scoring_model_name = self.model_uri.split('/')[-3]
 
         # Create SageMaker model
-        model = Model(
+        scoring_model = Model(
             image_uri=xgb_container,
             model_data=self.model_uri,
             role=self.role,
             sagemaker_session=self.sagemaker_session,
-            name=model_name
+            name=scoring_model_name
         )
 
         # Register model in SageMaker
-        model.create()
+        scoring_model.create()
 
-        return model_name
+        return scoring_model_name
 
 
     def _execute_batch_transform(self, dataset_uri: str, model_name: str):
