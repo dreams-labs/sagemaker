@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple,Union
+import numpy as np
 import pandas as pd
 
 # Add wallet_insights to path    # pylint:disable=wrong-import-position
@@ -11,14 +12,61 @@ from utils import ConfigError
 
 # pylint:disable=invalid-name  # X isn't lowercase
 
-def load_sagemaker_predictions(
+
+# --------------------------
+#      Primary Interface
+# --------------------------
+
+def run_sagemaker_evaluation(
+    sage_wallets_config: dict,
+    sage_wallets_modeling_config: dict,
+    date_suffix: str,
+    y_test_pred: pd.Series,
+    y_val_pred: pd.Series
+) -> wime.RegressorEvaluator:
+    """
+    Complete SageMaker evaluation pipeline: load data, create evaluator, run reports.
+
+    Params:
+    - sage_wallets_config (dict): Configuration for training data paths
+    - sage_wallets_modeling_config (dict): Configuration for model parameters
+    - date_suffix (str): Date suffix for file naming
+    - y_test_pred (pd.Series): Predicted values for the test set
+    - y_test_val (pd.Series): Predicted values for the validation set
+
+
+    Returns:
+    - RegressorEvaluator: Evaluator after running summary report and plots
+    """
+    wallet_evaluator = create_sagemaker_evaluator(
+        sage_wallets_config,
+        sage_wallets_modeling_config,
+        date_suffix,
+        y_test_pred,
+        y_val_pred
+    )
+
+    # Run evaluation
+    wallet_evaluator.summary_report()
+    wallet_evaluator.plot_wallet_evaluation()
+
+    return wallet_evaluator
+
+
+
+
+# --------------------------
+#      Helper Functions
+# --------------------------
+
+def load_endpoint_sagemaker_predictions(
     data_type: str,
     sage_wallets_config: dict,
     sage_wallets_modeling_config: dict,
     date_suffix: str
 ) -> Tuple[pd.Series, pd.Series]:
     """
-    Load SageMaker predictions and corresponding actuals for a given data type.
+    Load SageMaker predictions made using a SageMaker Endpoint API.
 
     Params:
     - data_type (str): Either 'test' or 'val'
@@ -39,56 +87,61 @@ def load_sagemaker_predictions(
     if 'score' not in pred_df.columns:
         raise ValueError(f"SageMaker predictions are missing the 'score' column. "
                         f"Available columns: {pred_df.columns}")
+
     pred_series = pred_df['score']
 
-    # Load actuals
-    training_data_path = (
-        Path(f"../s3_uploads") / "wallet_training_data_queue" /
-        f"{sage_wallets_config['training_data']['local_directory']}"
-    )
-    actuals_path = training_data_path / f"y_{data_type}_{date_suffix}.parquet"
-    actuals_df = pd.read_parquet(actuals_path)
+    # Check for NaN values
+    if pred_series.isna().any():
+        nan_count = pred_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
 
-    if len(actuals_df.columns) > 1:
-        raise ValueError(f"Found unexpected columns in y_{data_type}_df. "
-                        f"Expected 1 column, found {actuals_df.columns}.")
-    actuals_series = actuals_df.iloc[:, 0]
-
-    # Validate lengths and align indices
-    if len(pred_series) != len(actuals_series):
-        raise ValueError(f"Length of y_{data_type}_pred ({len(pred_series)}) does "
-                        f"not match length of y_{data_type}_true ({len(actuals_series)}).")
-
-    pred_series.index = actuals_series.index
-
-    return pred_series, actuals_series
+    return pred_series
 
 
-def create_mock_pipeline():
+def load_bt_sagemaker_predictions(
+    data_type: str,
+    sage_wallets_config: dict,
+    date_suffix: str
+) -> pd.Series:
     """
-    Create a mock pipeline for SageMaker evaluation compatibility.
+    Load SageMaker predictions made using SageMaker Batch Transform.
 
     Params:
-    - objective (str): XGBoost objective parameter
+    - data_type (str): Either 'test' or 'val'
+    - sage_wallets_config (dict): Configuration for training data paths
+    - date_suffix (str): Date suffix for file naming
 
     Returns:
-    - Mock pipeline object with required methods
+    - predictions_series (Series): Raw predictions without index alignment
     """
-    return type('MockPipeline', (), {
-        'named_steps': {'estimator': type('MockModel', (), {
-            'get_params': lambda self: {'objective': 'mock_objective'}
-        })()},
-        '__getitem__': lambda self, key: type('MockTransformer', (), {
-            'transform': lambda self, X: X
-        })()
-    })()
+    # Load predictions
+    pred_path = (
+        Path(f"{sage_wallets_config['training_data']['local_s3_root']}")
+        / "s3_downloads"
+        / "wallet_predictions"
+        / f"{sage_wallets_config['training_data']['local_directory']}"
+        / f"{date_suffix}"
+        / f"{data_type}.csv.out"
+    )
+    pred_df = pd.read_csv(pred_path, header=None)
+    pred_series = pred_df[0]
+
+    # Check for NaN values
+    if pred_series.isna().any():
+        nan_count = pred_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
+
+    return pred_series
+
 
 
 def create_sagemaker_evaluator(
     sage_wallets_config: dict,
     sage_wallets_modeling_config: dict,
-    date_suffix: str
-) -> wime.RegressorEvaluator:
+    date_suffix: str,
+    y_test_pred: pd.Series,
+    y_val_pred: pd.Series
+ ) -> Union[wime.RegressorEvaluator,wime.ClassifierEvaluator]:
     """
     Create a complete SageMaker wallet evaluator with all required data loaded.
 
@@ -96,33 +149,34 @@ def create_sagemaker_evaluator(
     - sage_wallets_config (dict): Configuration for training data paths
     - sage_wallets_modeling_config (dict): Configuration for model parameters
     - date_suffix (str): Date suffix for file naming
+    - y_test_pred (pd.Series): Predicted values for the test set
+    - y_test_val (pd.Series): Predicted values for the validation set
 
     Returns:
     - RegressorEvaluator: Configured evaluator ready for analysis
     """
-    # Load predictions and actuals
-    y_test_pred_series, y_test_true_series = load_sagemaker_predictions(
-        'test', sage_wallets_config, sage_wallets_modeling_config, date_suffix
-    )
-    y_val_pred_series, y_val_true_series = load_sagemaker_predictions(
-        'val', sage_wallets_config, sage_wallets_modeling_config, date_suffix
-    )
-
     # Load remaining training data
     training_data_path = (
-        Path(f"../s3_uploads") / "wallet_training_data_queue" /
-        f"{sage_wallets_config['training_data']['local_directory']}"
+        Path(f"{sage_wallets_config['training_data']['local_s3_root']}")
+        / "s3_uploads"
+        / "wallet_training_data_queue"
+        / f"{sage_wallets_config['training_data']['local_directory']}"
     )
     X_train = pd.read_parquet(training_data_path / f"x_train_{date_suffix}.parquet")
     y_train = pd.read_parquet(training_data_path / f"y_train_{date_suffix}.parquet")
     X_test = pd.read_parquet(training_data_path / f"x_test_{date_suffix}.parquet")
+    y_test = pd.read_parquet(training_data_path / f"y_test_{date_suffix}.parquet")
     X_val = pd.read_parquet(training_data_path / f"x_val_{date_suffix}.parquet")
     y_val = pd.read_parquet(training_data_path / f"y_val_{date_suffix}.parquet")
+
+    # Assign indices to pred arrays
+    y_test_pred = assign_index_to_pred(y_test_pred,y_test)
+    y_val_pred = assign_index_to_pred(y_val_pred,y_val)
 
     # Create model_id and modeling_config
     model_id = f"sagemaker_{sage_wallets_config['training_data']['local_directory']}_{date_suffix}"
 
-    target_variable = y_val_true_series.name or y_train.columns[0]
+    target_variable = y_train.columns[0]
     model_type = sage_wallets_modeling_config['training']['model_type']
     modeling_config = {
         'target_variable': target_variable,
@@ -152,15 +206,15 @@ def create_sagemaker_evaluator(
         'X_train': X_train,
         'X_test': X_test,
         'y_train': y_train,
-        'y_test': y_test_true_series,
-        'y_pred': y_test_pred_series,
+        'y_test': y_test,
+        'y_pred': y_test_pred,
         'training_cohort_pred': None,
         'training_cohort_actuals': None,
 
         # Validation data
         'X_validation': X_val,
-        'y_validation': y_val_true_series,
-        'y_validation_pred': y_val_pred_series,
+        'y_validation': y_val,
+        'y_validation_pred': y_val_pred,
         'validation_target_vars_df': y_val,
 
         # Mock pipeline
@@ -178,11 +232,6 @@ def create_sagemaker_evaluator(
     return wallet_evaluator
 
 
-def run_sagemaker_evaluation(
-    sage_wallets_config: dict,
-    sage_wallets_modeling_config: dict,
-    date_suffix: str
-) -> wime.RegressorEvaluator:
 
 
 # --------------------------
@@ -194,7 +243,6 @@ def assign_index_to_pred(
         actuals_df: pd.DataFrame
     ) -> pd.Series:
     """
-    Complete SageMaker evaluation pipeline: load data, create evaluator, run reports.
     Convert prediction series to Series with validated index alignment from actuals.
 
     Params:
