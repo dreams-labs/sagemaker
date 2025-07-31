@@ -238,7 +238,6 @@ class WalletWorkflowOrchestrator:
         return upload_results
 
 
-
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
         Generate S3 URIs for training data by finding files that match split patterns.
@@ -343,6 +342,58 @@ class WalletWorkflowOrchestrator:
 
         logger.info(f"All {len(training_results)} models trained successfully.")
         return training_results
+
+
+    def predict_with_all_models(
+            self,
+            dataset_types: list = None,
+            download_preds: bool = True
+        ):
+        """
+        Generate predictions for test and val datasets across all date suffixes using their respective trained models.
+        Uses nested concurrency: n_threads date suffixes × len(dataset_types) datasets.
+
+        Params:
+        - dataset_types (list): List of dataset types to predict (defaults to ['test', 'val'])
+        - download_preds (bool): Whether to download predictions locally
+
+        Returns:
+        - dict: Prediction results keyed by date suffix {date_suffix: {dataset_type: result}}
+        """
+        if dataset_types is None:
+            dataset_types = ['test', 'val']
+
+        if not self.date_suffixes:
+            raise ValueError("No date suffixes available. Call load_all_training_data() first.")
+
+        # Get S3 URIs for all dates
+        s3_uris = self.retrieve_training_data_uris(self.date_suffixes)
+
+        prediction_results = {}
+        n_threads = self.wallets_config['n_threads']['predict_all_models']
+
+        logger.milestone(f"Generating predictions for {len(self.date_suffixes)} date periods with {n_threads} threads...")
+        logger.info(f"Dataset types: {dataset_types}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_date = {
+                executor.submit(
+                    self._predict_with_single_model,
+                    date_suffix,
+                    s3_uris,
+                    dataset_types,
+                    download_preds
+                ): date_suffix
+                for date_suffix in self.date_suffixes
+            }
+
+            for future in concurrent.futures.as_completed(future_to_date):
+                date_suffix = future_to_date[future]
+                result = future.result()
+                prediction_results[date_suffix] = result
+
+        logger.milestone(f"All {len(prediction_results)} models generated predictions successfully.")
+        return prediction_results
 
 
 
@@ -749,3 +800,64 @@ class WalletWorkflowOrchestrator:
         logger.info(f"Successfully completed training for {date_suffix}")
         return result
 
+
+    def _predict_with_single_model(
+            self,
+            date_suffix: str,
+            s3_uris: dict,
+            dataset_types: list = None,
+            download_preds: bool = True
+        ) -> dict:
+        """
+        Generate predictions for test and val datasets using a specific date suffix's trained model.
+
+        Params:
+        - date_suffix (str): Date suffix for this prediction run
+        - s3_uris (dict): S3 URIs for all date suffixes
+        - dataset_types (list): List of dataset types to predict (defaults to ['test', 'val'])
+        - download_preds (bool): Whether to download predictions locally
+
+        Returns:
+        - dict: Prediction results for this date suffix {dataset_type: result}
+        """
+        if dataset_types is None:
+            dataset_types = ['test', 'val']
+
+        # Create WalletModeler instance for this date
+        # Date format validation handled in WalletModeler.__init__()
+        # Missing S3 URIs will be caught in predict_with_batch_transform() → _validate_s3_uris()
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris={date_suffix: s3_uris[date_suffix]},
+            override_approvals=self.wallets_config['workflow']['override_existing_models']
+        )
+
+        # Load existing trained model - FileNotFoundError raised if no model exists
+        model_info = modeler.load_existing_model()
+        logger.debug(f"Loaded model for {date_suffix}: {model_info['training_job_name']}")
+
+        # Generate predictions for datasets concurrently
+        prediction_results = {}
+        n_threads = self.wallets_config['n_threads']['predict_datasets']
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_dataset = {
+                executor.submit(
+                    modeler.predict_with_batch_transform,
+                    dataset_type,
+                    download_preds,
+                    dataset_type  # Pass dataset_type as job_name_suffix for unique job names
+                ): dataset_type
+                for dataset_type in dataset_types
+            }
+
+            for future in concurrent.futures.as_completed(future_to_dataset):
+                dataset_type = future_to_dataset[future]
+                result = future.result()
+                prediction_results[dataset_type] = result
+                logger.debug(f"Successfully generated predictions for {dataset_type} on {date_suffix}")
+
+        logger.milestone(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
+        return prediction_results
