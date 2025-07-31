@@ -34,6 +34,7 @@ class TrainingDataConfig(BaseModel):
     Configuration for training data settings.
     """
     local_s3_root: str = Field(...)
+    training_data_directory: str = Field(...)
     local_directory: str = Field(...)
     upload_directory: str = Field(...)
 
