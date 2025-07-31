@@ -372,7 +372,7 @@ class WalletWorkflowOrchestrator:
         prediction_results = {}
         n_threads = self.wallets_config['n_threads']['predict_all_models']
 
-        logger.info(f"Generating predictions for {len(self.date_suffixes)} date periods with {n_threads} threads...")
+        logger.milestone(f"Generating predictions for {len(self.date_suffixes)} date periods with {n_threads} threads...")
         logger.info(f"Dataset types: {dataset_types}")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
@@ -392,7 +392,7 @@ class WalletWorkflowOrchestrator:
                 result = future.result()
                 prediction_results[date_suffix] = result
 
-        logger.info(f"All {len(prediction_results)} models generated predictions successfully.")
+        logger.milestone(f"All {len(prediction_results)} models generated predictions successfully.")
         return prediction_results
 
 
@@ -859,5 +859,5 @@ class WalletWorkflowOrchestrator:
                 prediction_results[dataset_type] = result
                 logger.debug(f"Successfully generated predictions for {dataset_type} on {date_suffix}")
 
-        logger.info(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
+        logger.milestone(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
         return prediction_results

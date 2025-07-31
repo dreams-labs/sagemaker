@@ -773,16 +773,17 @@ class WalletModeler:
 
         # Execute batch transform
         logger.info(f"Starting batch transform job: {job_name}")
-        logger.info(f"Using model: {model_name}")
-        logger.info(f"Input data: {dataset_uri}")
-        logger.info(f"Output path: {output_path}")
+        logger.debug(f"Using model: {model_name}")
+        logger.debug(f"Input data: {dataset_uri}")
+        logger.debug(f"Output path: {output_path}")
 
         transformer.transform(
             data=dataset_uri,
             content_type='text/csv',
             split_type='Line',
             job_name=job_name,
-            wait=True
+            wait=True,
+            logs=False
         )
 
         # Store predictions URI
@@ -817,11 +818,9 @@ class WalletModeler:
                       f"{dataset_type}.csv.out")
 
         # Use generic utility to download
-        downloaded_path = s3u.download_from_uri(predictions_uri, local_path)
+        s3u.download_from_uri(predictions_uri, local_path)
 
-        logger.info(f"Downloaded {dataset_type} predictions to: {downloaded_path}")
-
-        return downloaded_path
+        return local_path
 
 
     # -------------------------------
