@@ -26,5 +26,7 @@ aws: #SageMaker
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
 
 n_threads: #SageMaker
-    upload_all_training_data: 4
-    train_all_models: 4
+    upload_all_training_data: 4 # how many uploads to perform concurrently
+    train_all_models: 4 # how many models to train concurrently
+    predict_datasets: 2 # whether to score 'test' and 'val' sets concurrently
+    predict_all_models: 2 # how many test/val pairs to score concurrently
