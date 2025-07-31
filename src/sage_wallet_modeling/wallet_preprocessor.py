@@ -126,6 +126,8 @@ class SageWalletsPreprocessor:
             json.dump(processed_data['metadata'], f, indent=2)
         logger.info(f"Saved metadata to {metadata_file}")
 
+        logger.milestone(f"Successfully preprocessed data for '{date_suffix}'.")
+
         return processed_data
 
 
