@@ -18,8 +18,8 @@ from utils import ConfigError
 # --------------------------
 
 def run_sagemaker_evaluation(
-    sage_wallets_config: dict,
-    sage_wallets_modeling_config: dict,
+    wallets_config: dict,
+    modeling_config: dict,
     date_suffix: str,
     y_test_pred: pd.Series,
     y_val_pred: pd.Series
@@ -28,8 +28,8 @@ def run_sagemaker_evaluation(
     Complete SageMaker evaluation pipeline: load data, create evaluator, run reports.
 
     Params:
-    - sage_wallets_config (dict): Configuration for training data paths
-    - sage_wallets_modeling_config (dict): Configuration for model parameters
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration for model parameters
     - date_suffix (str): Date suffix for file naming
     - y_test_pred (pd.Series): Predicted values for the test set
     - y_test_val (pd.Series): Predicted values for the validation set
@@ -39,8 +39,8 @@ def run_sagemaker_evaluation(
     - RegressorEvaluator: Evaluator after running summary report and plots
     """
     wallet_evaluator = create_sagemaker_evaluator(
-        sage_wallets_config,
-        sage_wallets_modeling_config,
+        wallets_config,
+        modeling_config,
         date_suffix,
         y_test_pred,
         y_val_pred
@@ -61,8 +61,8 @@ def run_sagemaker_evaluation(
 
 def load_endpoint_sagemaker_predictions(
     data_type: str,
-    sage_wallets_config: dict,
-    sage_wallets_modeling_config: dict,
+    wallets_config: dict,
+    modeling_config: dict,
     date_suffix: str
 ) -> Tuple[pd.Series, pd.Series]:
     """
@@ -70,8 +70,8 @@ def load_endpoint_sagemaker_predictions(
 
     Params:
     - data_type (str): Either 'test' or 'val'
-    - sage_wallets_config (dict): Configuration for training data paths
-    - sage_wallets_modeling_config (dict): Configuration for model parameters
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration for model parameters
     - date_suffix (str): Date suffix for file naming
 
     Returns:
@@ -79,8 +79,8 @@ def load_endpoint_sagemaker_predictions(
     """
     # Load predictions
     pred_path = (
-        Path(sage_wallets_modeling_config['metaparams']['endpoint_preds_dir']) /
-        f"endpoint_y_pred_{data_type}_{sage_wallets_config['training_data']['local_directory']}"
+        Path(modeling_config['metaparams']['endpoint_preds_dir']) /
+        f"endpoint_y_pred_{data_type}_{wallets_config['training_data']['local_directory']}"
         f"_{date_suffix}.csv")
     pred_df = pd.read_csv(pred_path)
 
@@ -100,7 +100,7 @@ def load_endpoint_sagemaker_predictions(
 
 def load_bt_sagemaker_predictions(
     data_type: str,
-    sage_wallets_config: dict,
+    wallets_config: dict,
     date_suffix: str
 ) -> pd.Series:
     """
@@ -108,7 +108,7 @@ def load_bt_sagemaker_predictions(
 
     Params:
     - data_type (str): Either 'test' or 'val'
-    - sage_wallets_config (dict): Configuration for training data paths
+    - wallets_config (dict): Configuration for training data paths
     - date_suffix (str): Date suffix for file naming
 
     Returns:
@@ -116,10 +116,10 @@ def load_bt_sagemaker_predictions(
     """
     # Load predictions
     pred_path = (
-        Path(f"{sage_wallets_config['training_data']['local_s3_root']}")
+        Path(f"{wallets_config['training_data']['local_s3_root']}")
         / "s3_downloads"
         / "wallet_predictions"
-        / f"{sage_wallets_config['training_data']['local_directory']}"
+        / f"{wallets_config['training_data']['local_directory']}"
         / f"{date_suffix}"
         / f"{data_type}.csv.out"
     )
@@ -136,8 +136,8 @@ def load_bt_sagemaker_predictions(
 
 
 def create_sagemaker_evaluator(
-    sage_wallets_config: dict,
-    sage_wallets_modeling_config: dict,
+    wallets_config: dict,
+    modeling_config: dict,
     date_suffix: str,
     y_test_pred: pd.Series,
     y_val_pred: pd.Series
@@ -146,8 +146,8 @@ def create_sagemaker_evaluator(
     Create a complete SageMaker wallet evaluator with all required data loaded.
 
     Params:
-    - sage_wallets_config (dict): Configuration for training data paths
-    - sage_wallets_modeling_config (dict): Configuration for model parameters
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration for model parameters
     - date_suffix (str): Date suffix for file naming
     - y_test_pred (pd.Series): Predicted values for the test set
     - y_test_val (pd.Series): Predicted values for the validation set
@@ -157,14 +157,14 @@ def create_sagemaker_evaluator(
     """
     # 1. Load and Prepare Training Data
     # ---------------------------------
-    model_type = sage_wallets_modeling_config['training']['model_type']
+    model_type = modeling_config['training']['model_type']
 
     # Load remaining training data
     training_data_path = (
-        Path(f"{sage_wallets_config['training_data']['local_s3_root']}")
+        Path(f"{wallets_config['training_data']['local_s3_root']}")
         / "s3_uploads"
         / "wallet_training_data_queue"
-        / f"{sage_wallets_config['training_data']['local_directory']}"
+        / f"{wallets_config['training_data']['local_directory']}"
     )
     X_train = pd.read_parquet(training_data_path / f"x_train_{date_suffix}.parquet")
     y_train = pd.read_parquet(training_data_path / f"y_train_{date_suffix}.parquet")
@@ -189,7 +189,7 @@ def create_sagemaker_evaluator(
             'modeling_period_duration': 30
         },
         'sagemaker_metadata': {
-            'local_directory': sage_wallets_config['training_data']['local_directory'],
+            'local_directory': wallets_config['training_data']['local_directory'],
             'date_suffix': date_suffix
         }
     }
@@ -198,11 +198,11 @@ def create_sagemaker_evaluator(
     # -----------------------------
     if model_type == 'classification':
         # Add y_pred_theshold to config
-        y_pred_thresh = sage_wallets_modeling_config['predicting']['y_pred_threshold']
+        y_pred_thresh = modeling_config['predicting']['y_pred_threshold']
         wime_modeling_config['y_pred_threshold'] = y_pred_thresh
 
         # Convert to binary for classification models
-        preprocessor = SageWalletsPreprocessor(sage_wallets_config, sage_wallets_modeling_config)
+        preprocessor = SageWalletsPreprocessor(wallets_config, modeling_config)
         y_train = preprocessor.preprocess_y_data(y_train, 'train')
         y_test = preprocessor.preprocess_y_data(y_test, 'test')
         y_pred_proba = y_test_pred
@@ -216,7 +216,7 @@ def create_sagemaker_evaluator(
     # 4. Prepare model results
     # ------------------------
     # Create model_id
-    model_id = f"sagemaker_{sage_wallets_config['training_data']['local_directory']}_{date_suffix}"
+    model_id = f"sagemaker_{wallets_config['training_data']['local_directory']}_{date_suffix}"
 
     wallet_model_results = {
         'model_id': model_id,
@@ -239,7 +239,7 @@ def create_sagemaker_evaluator(
         'validation_target_vars_df': y_val,
 
         # Mock pipeline
-        'pipeline': create_mock_pipeline()
+        'pipeline': create_mock_pipeline(model_type)
     }
 
     if model_type == 'classification':
@@ -310,7 +310,7 @@ def assign_index_to_pred(
 
 
 
-def create_mock_pipeline():
+def create_mock_pipeline(model_type):
     """
     Create a mock pipeline for wime evaluation compatibility.
 
@@ -322,7 +322,7 @@ def create_mock_pipeline():
     """
     return type('MockPipeline', (), {
         'named_steps': {'estimator': type('MockModel', (), {
-            'get_params': lambda self: {'objective': 'mock_objective'}
+            f'get_params': lambda self: {'objective': f'{model_type}'}
         })()},
         '__getitem__': lambda self, key: type('MockTransformer', (), {
             'transform': lambda self, X: X
