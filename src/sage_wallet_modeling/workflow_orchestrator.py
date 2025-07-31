@@ -350,7 +350,9 @@ class WalletWorkflowOrchestrator:
             download_preds: bool = True
         ):
         """
-        Generate predictions for test and val datasets across all date suffixes using their respective trained models.
+        Generate predictions for test and val datasets across all date suffixes using their
+         respective trained models.
+
         Uses nested concurrency: n_threads date suffixes × len(dataset_types) datasets.
 
         Params:
@@ -372,7 +374,8 @@ class WalletWorkflowOrchestrator:
         prediction_results = {}
         n_threads = self.wallets_config['n_threads']['predict_all_models']
 
-        logger.milestone(f"Generating predictions for {len(self.date_suffixes)} date periods with {n_threads} threads...")
+        logger.milestone(f"Generating predictions for {len(self.date_suffixes)} date "
+                         f"periods with {n_threads} threads...")
         logger.info(f"Dataset types: {dataset_types}")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
@@ -861,3 +864,4 @@ class WalletWorkflowOrchestrator:
 
         logger.milestone(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
         return prediction_results
+    
