@@ -102,7 +102,7 @@ class WalletWorkflowOrchestrator:
         already been merged upstream, so no concatenation occurs at this stage.
         """
         # Data location validation with dataset suffix
-        load_folder = self.wallets_config['training_data']['local_directory']
+        load_folder = self.wallets_config['training_data']['training_data_directory']
 
         if self.dataset == 'dev':
             load_folder = f"{load_folder}_dev"
@@ -430,7 +430,7 @@ class WalletWorkflowOrchestrator:
         return evaluation_results
 
 
-    def _evaluate_single_model(self, date_suffix: str):
+    def _evaluate_single_model(self, date_suffix: str, log_summary: bool = True):
         """
         Run complete evaluation for a single date suffix model.
 
@@ -453,7 +453,7 @@ class WalletWorkflowOrchestrator:
         )
 
         # Run complete evaluation pipeline
-        evaluator = sime.run_sagemaker_evaluation(
+        evaluator = sime.create_sagemaker_evaluator(
             self.wallets_config,
             self.modeling_config,
             date_suffix,
@@ -461,7 +461,11 @@ class WalletWorkflowOrchestrator:
             y_val_pred
         )
 
-        logger.info(f"Successfully completed evaluation for {date_suffix}")
+        logger.info(f"Successfully generated evaluator for {date_suffix}.")
+
+        if log_summary:
+            evaluator.summary_report()
+
         return evaluator
 
 
