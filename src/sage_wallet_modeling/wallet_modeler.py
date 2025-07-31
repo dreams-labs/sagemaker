@@ -249,7 +249,8 @@ class WalletModeler:
     def predict_with_batch_transform(
             self,
             dataset_type: str = 'val',
-            download_preds: bool = True
+            download_preds: bool = True,
+            job_name_suffix: str = None
         ):
         """
         Score specified dataset using trained model via SageMaker batch transform.
@@ -258,6 +259,7 @@ class WalletModeler:
         - dataset_type (str): Type of dataset to score ('val' or 'test')
         - download_preds (bool): Whether to download the predictions to the local
             s3_downloads directory
+        - job_name_suffix (str): Optional suffix to append to job name for uniqueness
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -277,7 +279,7 @@ class WalletModeler:
         # Identify model name (i.e. the directory preceding '/output/model.tar.gz')
         if not self.model_uri.endswith('/output/model.tar.gz'):
             raise ValueError(f"Expected model URI to end with '/output/model.tar.gz', "
-                             f"got: {self.model_uri}")
+                            f"got: {self.model_uri}")
         model_name = self.model_uri.split('/')[-3]
 
         # Setup model for batch transform
@@ -285,7 +287,11 @@ class WalletModeler:
 
         # Execute batch transform on specified dataset
         dataset_uri = date_uris[dataset_type]
-        result = self._execute_batch_transform(dataset_uri, model_name)
+        result = self._execute_batch_transform(
+            dataset_uri,
+            model_name,
+            job_name_suffix=job_name_suffix
+        )
 
         # Download if configured
         if download_preds:
@@ -713,7 +719,8 @@ class WalletModeler:
             self,
             dataset_uri: str,
             model_name: str,
-            override_existing: bool = False
+            override_existing: bool = False,
+            job_name_suffix: str = None
         ):
         """
         Execute batch transform job for specified dataset URI.
@@ -722,6 +729,7 @@ class WalletModeler:
         - dataset_uri (str): S3 URI of dataset to score
         - model_name (str): Name of registered SageMaker model
         - override_existing (bool): Whether to overwrite existing output files
+        - job_name_suffix (str): Optional suffix to append to job name for uniqueness
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -729,6 +737,8 @@ class WalletModeler:
         # Configure batch transform job
         timestamp = datetime.now().strftime("%H%M%S")
         job_name = f"wallet-scoring-{self.date_suffix}-{timestamp}"
+        if job_name_suffix:
+            job_name = f"{job_name}-{job_name_suffix}"
 
         output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
                     f"validation-data-scored/"
