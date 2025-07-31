@@ -17,124 +17,6 @@ from utils import ConfigError
 #      Primary Interface
 # --------------------------
 
-def run_sagemaker_evaluation(
-    wallets_config: dict,
-    modeling_config: dict,
-    date_suffix: str,
-    y_test_pred: pd.Series,
-    y_val_pred: pd.Series
-) -> wime.RegressorEvaluator:
-    """
-    Complete SageMaker evaluation pipeline: load data, create evaluator, run reports.
-
-    Params:
-    - wallets_config (dict): Configuration for training data paths
-    - modeling_config (dict): Configuration for model parameters
-    - date_suffix (str): Date suffix for file naming
-    - y_test_pred (pd.Series): Predicted values for the test set
-    - y_test_val (pd.Series): Predicted values for the validation set
-
-
-    Returns:
-    - RegressorEvaluator: Evaluator after running summary report and plots
-    """
-    wallet_evaluator = create_sagemaker_evaluator(
-        wallets_config,
-        modeling_config,
-        date_suffix,
-        y_test_pred,
-        y_val_pred
-    )
-
-    # Run evaluation
-    wallet_evaluator.summary_report()
-    wallet_evaluator.plot_wallet_evaluation()
-
-    return wallet_evaluator
-
-
-
-
-# --------------------------
-#      Helper Functions
-# --------------------------
-
-def load_endpoint_sagemaker_predictions(
-    data_type: str,
-    wallets_config: dict,
-    modeling_config: dict,
-    date_suffix: str
-) -> Tuple[pd.Series, pd.Series]:
-    """
-    Load SageMaker predictions made using a SageMaker Endpoint API.
-
-    Params:
-    - data_type (str): Either 'test' or 'val'
-    - wallets_config (dict): Configuration for training data paths
-    - modeling_config (dict): Configuration for model parameters
-    - date_suffix (str): Date suffix for file naming
-
-    Returns:
-    - tuple: (predictions_series, actuals_series) with aligned indices
-    """
-    # Load predictions
-    pred_path = (
-        Path(modeling_config['metaparams']['endpoint_preds_dir']) /
-        f"endpoint_y_pred_{data_type}_{wallets_config['training_data']['local_directory']}"
-        f"_{date_suffix}.csv")
-    pred_df = pd.read_csv(pred_path)
-
-    if 'score' not in pred_df.columns:
-        raise ValueError(f"SageMaker predictions are missing the 'score' column. "
-                        f"Available columns: {pred_df.columns}")
-
-    pred_series = pred_df['score']
-
-    # Check for NaN values
-    if pred_series.isna().any():
-        nan_count = pred_series.isna().sum()
-        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
-
-    return pred_series
-
-
-def load_bt_sagemaker_predictions(
-    data_type: str,
-    wallets_config: dict,
-    date_suffix: str
-) -> pd.Series:
-    """
-    Load SageMaker predictions made using SageMaker Batch Transform.
-
-    Params:
-    - data_type (str): Either 'test' or 'val'
-    - wallets_config (dict): Configuration for training data paths
-    - date_suffix (str): Date suffix for file naming
-
-    Returns:
-    - predictions_series (Series): Raw predictions without index alignment
-    """
-    # Load predictions
-    pred_path = (
-        Path(f"{wallets_config['training_data']['local_s3_root']}")
-        / "s3_downloads"
-        / "wallet_predictions"
-        / f"{wallets_config['training_data']['local_directory']}"
-        / f"{date_suffix}"
-        / f"{data_type}.csv.out"
-    )
-    pred_df = pd.read_csv(pred_path, header=None)
-    pred_series = pred_df[0]
-
-    # Check for NaN values
-    if pred_series.isna().any():
-        nan_count = pred_series.isna().sum()
-        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
-
-    return pred_series
-
-
-
 def create_sagemaker_evaluator(
     wallets_config: dict,
     modeling_config: dict,
@@ -256,6 +138,89 @@ def create_sagemaker_evaluator(
         raise ConfigError(f"Unknown model type {model_type} found in config.")
 
     return wallet_evaluator
+
+
+
+
+
+# --------------------------
+#      Helper Functions
+# --------------------------
+
+def load_endpoint_sagemaker_predictions(
+    data_type: str,
+    wallets_config: dict,
+    modeling_config: dict,
+    date_suffix: str
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Load SageMaker predictions made using a SageMaker Endpoint API.
+
+    Params:
+    - data_type (str): Either 'test' or 'val'
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration for model parameters
+    - date_suffix (str): Date suffix for file naming
+
+    Returns:
+    - tuple: (predictions_series, actuals_series) with aligned indices
+    """
+    # Load predictions
+    pred_path = (
+        Path(modeling_config['metaparams']['endpoint_preds_dir']) /
+        f"endpoint_y_pred_{data_type}_{wallets_config['training_data']['local_directory']}"
+        f"_{date_suffix}.csv")
+    pred_df = pd.read_csv(pred_path)
+
+    if 'score' not in pred_df.columns:
+        raise ValueError(f"SageMaker predictions are missing the 'score' column. "
+                        f"Available columns: {pred_df.columns}")
+
+    pred_series = pred_df['score']
+
+    # Check for NaN values
+    if pred_series.isna().any():
+        nan_count = pred_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
+
+    return pred_series
+
+
+def load_bt_sagemaker_predictions(
+    data_type: str,
+    wallets_config: dict,
+    date_suffix: str
+) -> pd.Series:
+    """
+    Load SageMaker predictions made using SageMaker Batch Transform.
+
+    Params:
+    - data_type (str): Either 'test' or 'val'
+    - wallets_config (dict): Configuration for training data paths
+    - date_suffix (str): Date suffix for file naming
+
+    Returns:
+    - predictions_series (Series): Raw predictions without index alignment
+    """
+    # Load predictions
+    pred_path = (
+        Path(f"{wallets_config['training_data']['local_s3_root']}")
+        / "s3_downloads"
+        / "wallet_predictions"
+        / f"{wallets_config['training_data']['local_directory']}"
+        / f"{date_suffix}"
+        / f"{data_type}.csv.out"
+    )
+    pred_df = pd.read_csv(pred_path, header=None)
+    pred_series = pred_df[0]
+
+    # Check for NaN values
+    if pred_series.isna().any():
+        nan_count = pred_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} predictions.")
+
+    return pred_series
+
 
 
 
