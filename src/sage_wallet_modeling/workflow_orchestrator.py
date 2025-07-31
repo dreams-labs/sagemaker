@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 # Local modules
 from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
 from sage_wallet_modeling.wallet_modeler import WalletModeler
+import sage_wallet_insights.model_evaluation as sime
 import utils as u
 import sage_utils.config_validation as ucv
 
@@ -399,6 +400,69 @@ class WalletWorkflowOrchestrator:
         return prediction_results
 
 
+    def evaluate_all_models(self):
+        """
+        Run complete evaluation pipeline for all date suffixes using their respective predictions.
+
+        Returns:
+        - dict: Evaluation results keyed by date suffix {date_suffix: evaluator}
+        """
+        if not self.date_suffixes:
+            raise ValueError("No date suffixes available. Call load_all_training_data() first.")
+
+        evaluation_results = {}
+        n_threads = self.wallets_config['n_threads']['evaluate_all_models']
+
+        logger.milestone(f"Evaluating {len(self.date_suffixes)} models with {n_threads} threads...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_date = {
+                executor.submit(self._evaluate_single_model, date_suffix): date_suffix
+                for date_suffix in self.date_suffixes
+            }
+
+            for future in concurrent.futures.as_completed(future_to_date):
+                date_suffix = future_to_date[future]
+                evaluator = future.result()
+                evaluation_results[date_suffix] = evaluator
+
+        logger.milestone(f"All {len(evaluation_results)} model evaluations completed successfully.")
+        return evaluation_results
+
+
+    def _evaluate_single_model(self, date_suffix: str):
+        """
+        Run complete evaluation for a single date suffix model.
+
+        Params:
+        - date_suffix (str): Date suffix for this evaluation
+
+        Returns:
+        - RegressorEvaluator or ClassifierEvaluator: Completed evaluator instance
+        """
+        # Load predictions for this date suffix
+        y_test_pred = sime.load_bt_sagemaker_predictions(
+            'test',
+            self.wallets_config,
+            date_suffix
+        )
+        y_val_pred = sime.load_bt_sagemaker_predictions(
+            'val',
+            self.wallets_config,
+            date_suffix
+        )
+
+        # Run complete evaluation pipeline
+        evaluator = sime.run_sagemaker_evaluation(
+            self.wallets_config,
+            self.modeling_config,
+            date_suffix,
+            y_test_pred,
+            y_val_pred
+        )
+
+        logger.info(f"Successfully completed evaluation for {date_suffix}")
+        return evaluator
 
 
 
@@ -864,4 +928,3 @@ class WalletWorkflowOrchestrator:
 
         logger.milestone(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
         return prediction_results
-    
