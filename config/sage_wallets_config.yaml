@@ -30,7 +30,7 @@ aws: #SageMaker
 
 script_mode: #SageMaker
     enabled: True
-    entry_point: script_model_main.py
+    entry_point: single_model_entry.py
     source_dir: ../src/script_modeling
 
 n_threads: #SageMaker
