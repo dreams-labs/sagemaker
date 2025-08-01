@@ -23,6 +23,7 @@ workflow:
 
 aws: #SageMaker
     training_bucket: wallet-training-data
+    script_model_bucket: wallet-script-models
     preprocessed_directory: training-data-preprocessed
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
 

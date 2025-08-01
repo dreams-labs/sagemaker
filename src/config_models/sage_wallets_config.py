@@ -108,6 +108,7 @@ class AWSConfig(NoExtrasBaseModel):
     Configuration for AWS settings.
     """
     training_bucket: str = Field(...)
+    script_model_bucket: str = Field(...)
     preprocessed_directory: str = Field(...)
     modeler_arn: str = Field(...)
 
