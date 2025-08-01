@@ -30,7 +30,8 @@ aws: #SageMaker
 
 script_mode: #SageMaker
     enabled: True
-    entry_point: single_model_entry.py
+    # entry_point: single_model_entry.py
+    entry_point: temporal_cv_model_entry.py
     source_dir: ../src/script_modeling
 
 n_threads: #SageMaker
