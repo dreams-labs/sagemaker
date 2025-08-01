@@ -110,6 +110,7 @@ class AWSConfig(NoExtrasBaseModel):
     training_bucket: str = Field(...)
     script_model_bucket: str = Field(...)
     preprocessed_directory: str = Field(...)
+    temporal_cv_directory: str = Field(...)
     modeler_arn: str = Field(...)
 
 
