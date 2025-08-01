@@ -400,23 +400,56 @@ class WalletWorkflowOrchestrator:
         s3_client = boto3.client("s3")
         bucket = self.wallets_config['aws']['training_bucket']
         temporal_prefix = self.wallets_config['aws']['temporal_cv_directory']
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        cv_prefix = f"{temporal_prefix}/cross_date_cv_{timestamp}"
+        # Use a deterministic folder based on upload_directory
+        upload_dir = self.wallets_config['training_data']['upload_directory']
+        cv_prefix = f"{temporal_prefix}/{upload_dir}"
 
+        # Check if CV folder already exists in S3
+        existing = s3_client.list_objects_v2(
+            Bucket=bucket, Prefix=cv_prefix + '/'
+        ).get('KeyCount', 0) > 0
+        if existing:
+            msg = f"s3://{bucket}/{cv_prefix}/ already exists. Overwrite existing CV files?"
+            overwrite_all = u.request_confirmation(msg)
+        else:
+            overwrite_all = True
+
+        uploaded_count = 0
         for suffix in date_suffixes:
             fold_prefix = f"{cv_prefix}/fold_{suffix}"
-            # Copy train.csv
+            # For train.csv
             src_train_uri = s3_uris[suffix]['train']
             src_train_key = src_train_uri.replace(f"s3://{bucket}/", "")
             dest_train_key = f"{fold_prefix}/train.csv"
-            s3_client.copy({'Bucket': bucket, 'Key': src_train_key}, bucket, dest_train_key)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=dest_train_key)
+                exists = True
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    exists = False
+                else:
+                    raise
+            if not exists or overwrite_all:
+                s3_client.copy({'Bucket': bucket, 'Key': src_train_key}, bucket, dest_train_key)
+                uploaded_count += 1
 
-            # Copy eval.csv → validation.csv
+            # For validation.csv
             src_eval_uri = s3_uris[suffix]['eval']
             src_eval_key = src_eval_uri.replace(f"s3://{bucket}/", "")
             dest_eval_key = f"{fold_prefix}/validation.csv"
-            s3_client.copy({'Bucket': bucket, 'Key': src_eval_key}, bucket, dest_eval_key)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=dest_eval_key)
+                exists = True
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    exists = False
+                else:
+                    raise
+            if not exists or overwrite_all:
+                s3_client.copy({'Bucket': bucket, 'Key': src_eval_key}, bucket, dest_eval_key)
+                uploaded_count += 1
 
+        logger.info(f"Uploaded {uploaded_count} CV files to s3://{bucket}/{cv_prefix}")
         # Return the S3 URI for the CV folder
         return f"s3://{bucket}/{cv_prefix}"
 
