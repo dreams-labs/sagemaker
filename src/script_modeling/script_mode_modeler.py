@@ -29,70 +29,6 @@ from sklearn.metrics import average_precision_score
 
 
 
-
-# --------------------------------------------------------------------------- #
-#                                Main Routine                                 #
-# --------------------------------------------------------------------------- #
-def main() -> None:
-    """
-    Train one fold of the wallet-classifier in SageMaker *script-mode*.
-
-    The routine reads the pre-mounted train/validation CSVs, fits an XGBoost
-    binary-logistic model with early stopping, prints the validation PR-AUC
-    in `label=value` form for the HPO tuner, and saves the trained booster
-    to `$SM_MODEL_DIR` so the default inference container can serve it. All
-    filepaths are relative to the container only and have no impact on S3 or
-    local directories.
-    """
-
-    # Loads training and validation data from their relative local path that the
-    #  container has copied them to
-    train_csv = Path("/opt/ml/input/data/train/train.csv")
-    val_csv = Path("/opt/ml/input/data/validation/validation.csv")
-    training_matrix = load_csv_as_dmatrix(train_csv)
-    validation_matrix = load_csv_as_dmatrix(val_csv)
-
-    # Define hyperparameters from the parse arguments
-    args = load_hyperparams_from_cli()
-    booster_params: dict[str, float | int | str] = {
-        "objective": "binary:logistic",
-        "eval_metric": "aucpr",     # built-in PR-AUC for training progress
-        "eta": args.eta,
-        "max_depth": args.max_depth,
-        "subsample": args.subsample,
-        "seed": 42,
-    }
-
-    # Train with early stopping
-    booster = xgb.train(
-        params=booster_params,
-        dtrain=training_matrix,
-        num_boost_round=args.num_boost_round,
-        evals=[(validation_matrix, "val")],
-        early_stopping_rounds=args.early_stopping_rounds,
-        verbose_eval=False,
-    )
-
-    # Compute PR-AUC on validation
-    y_val_predictions = booster.predict(validation_matrix)
-    y_val_actuals = validation_matrix.get_label()
-    pr_auc = average_precision_score(y_val_actuals, y_val_predictions)
-
-    # Emit metric for SageMaker’s regex parser.
-    print(f"validation:cv_auc_pr={pr_auc:.6f}")
-
-    # Persist model artifacts to relative paths within the container
-    model_output_dir = Path(os.environ.get("SM_MODEL_DIR", "/opt/ml/model"))
-    model_output_dir.mkdir(parents=True, exist_ok=True)
-    booster.save_model(model_output_dir / "xgboost-model")
-
-
-# Run the script when executed inside the container
-if __name__ == "__main__":
-    main()
-
-
-
 # --------------------------------------------------------------------------- #
 #                               Helper Functions                              #
 # --------------------------------------------------------------------------- #
@@ -154,3 +90,72 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
 
     # Label is XGBoost's term for target variable
     return xgb.DMatrix(feature_matrix, label=target_vector)
+
+
+
+# --------------------------------------------------------------------------- #
+#                                Main Routine                                 #
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    """
+    Train one fold of the wallet-classifier in SageMaker *script-mode*.
+
+    The routine reads the pre-mounted train/validation CSVs, fits an XGBoost
+    binary-logistic model with early stopping, prints the validation PR-AUC
+    in `label=value` form for the HPO tuner, and saves the trained booster
+    to `$SM_MODEL_DIR` so the default inference container can serve it. All
+    filepaths are relative to the container only and have no impact on S3 or
+    local directories.
+    """
+
+    # Loads training and validation data from their relative local path that the
+    #  container has copied them to
+
+    print("Train files:", os.listdir("/opt/ml/input/data/train/"))
+    print("Validation files:", os.listdir("/opt/ml/input/data/validation/"))
+
+
+    train_csv = Path("/opt/ml/input/data/train/train.csv")
+    val_csv = Path("/opt/ml/input/data/validation/val.csv")
+    training_matrix = load_csv_as_dmatrix(train_csv)
+    validation_matrix = load_csv_as_dmatrix(val_csv)
+
+    # Define hyperparameters from the parse arguments
+    args = load_hyperparams_from_cli()
+    booster_params: dict[str, float | int | str] = {
+        "objective": "binary:logistic",
+        "eval_metric": "aucpr",     # built-in PR-AUC for training progress
+        "eta": args.eta,
+        "max_depth": args.max_depth,
+        "subsample": args.subsample,
+        "seed": 42,
+    }
+
+    # Train with early stopping
+    booster = xgb.train(
+        params=booster_params,
+        dtrain=training_matrix,
+        num_boost_round=args.num_boost_round,
+        evals=[(validation_matrix, "val")],
+        early_stopping_rounds=args.early_stopping_rounds,
+        verbose_eval=False,
+    )
+
+    # Compute PR-AUC on validation
+    y_val_predictions = booster.predict(validation_matrix)
+    y_val_actuals = validation_matrix.get_label()
+    pr_auc = average_precision_score(y_val_actuals, y_val_predictions)
+
+    # Emit metric for SageMaker’s regex parser.
+    print(f"validation:cv_auc_pr={pr_auc:.6f}")
+
+    # Persist model artifacts to relative paths within the container
+    model_output_dir = Path(os.environ.get("SM_MODEL_DIR", "/opt/ml/model"))
+    model_output_dir.mkdir(parents=True, exist_ok=True)
+    booster.save_model(model_output_dir / "xgboost-model")
+
+
+# Run the script when executed inside the container
+if __name__ == "__main__":
+    main()
+
