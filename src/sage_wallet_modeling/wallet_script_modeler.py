@@ -39,8 +39,6 @@ def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, 
     return hp
 
 
-
-
 def _build_job_name(prefix: str, upload_dir: str, suffix: str = None) -> str:
     """
     Build a unique SageMaker job name and return job_name.
@@ -52,6 +50,7 @@ def _build_job_name(prefix: str, upload_dir: str, suffix: str = None) -> str:
     parts.append(ts)
     job_name = "-".join(parts)
     return job_name
+
 
 def train_single_period_script_model(
     wallets_config: Dict,
@@ -133,4 +132,67 @@ def train_single_period_script_model(
         "model_uri": model_uri,
         "training_job_name": job_name,
         "date_suffix": date_suffix
+    }
+
+
+# -----------------------------------------------------------
+#   Multi-period temporal cross-validation script-mode trainer
+# -----------------------------------------------------------
+def train_temporal_cv_script_model(
+    wallets_config: Dict,
+    modeling_config: Dict,
+    cv_s3_uri: str,
+) -> Dict[str, str]:
+    """
+    Launch a SageMaker script-mode XGBoost training job for cross-date CV.
+
+    Params:
+    - wallets_config (dict): Validated sage_wallets_config.yaml as a dict.
+    - modeling_config (dict): Validated sage_wallets_modeling_config.yaml as a dict.
+    - cv_s3_uri (str): S3 URI of the root CV directory (contains fold_{suffix}/train.csv and /validation.csv).
+
+    Returns:
+    - dict: {
+        'model_uri': str,            # S3 URI of the trained model artifact
+        'training_job_name': str      # Name of the SageMaker training job
+      }
+    """
+    # Read script_mode configuration
+    script_cfg = wallets_config.get('script_mode', {})
+    entry_point = script_cfg['entry_point']
+    source_dir = script_cfg['source_dir']
+
+    # Prepare hyperparameters for script-mode
+    hp = _prepare_hyperparameters(modeling_config['training']['hyperparameters'])
+
+    # Build output path and job name
+    bucket = wallets_config['aws']['script_model_bucket']
+    upload_dir = wallets_config['training_data']['upload_directory']
+    job_name = _build_job_name("wallet-script-cv", upload_dir)
+    output_path = f"s3://{bucket}/model-outputs/{upload_dir}/cv/{job_name}"
+
+    # Instantiate the XGBoost ScriptMode estimator
+    estimator = XGBoost(
+        entry_point=entry_point,
+        source_dir=source_dir,
+        framework_version=modeling_config['framework']['version'],
+        instance_type=modeling_config['metaparams']['instance_type'],
+        instance_count=modeling_config['metaparams']['instance_count'],
+        role=wallets_config['aws']['modeler_arn'],
+        hyperparameters=hp,
+        output_path=output_path
+    )
+
+    # Prepare CV channel input
+    cv_input = TrainingInput(s3_data=cv_s3_uri, content_type='text/csv')
+
+    logger.info(f"Launching script-mode CV training job: {job_name}")
+    estimator.fit({'cv': cv_input}, job_name=job_name, wait=True)
+
+    model_uri = estimator.model_data
+    logger.info(f"Script-mode CV training completed. Model URI: {model_uri}")
+
+    return {
+        'model_uri': model_uri,
+        'training_job_name': job_name
     }
