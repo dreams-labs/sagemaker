@@ -2,7 +2,7 @@
 Validation logic for items in sagemaker_config.yaml
 """
 from enum import Enum
-from typing import Union, Dict
+from typing import Union, Dict, List
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -38,6 +38,10 @@ class TrainingDataConfig(BaseModel):
     training_data_directory: str = Field(...)
     local_directory: str = Field(...)
     upload_directory: str = Field(...)
+    dataset: str = Field(...)
+    train_offsets: List[str] = Field(...)
+    eval_offsets: List[str] = Field(...)
+    val_offsets: List[str] = Field(...)
 
     @field_validator('local_directory')
     @classmethod

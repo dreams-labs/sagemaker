@@ -7,6 +7,33 @@ training_data: #SageMaker
     upload_directory: dda-920-nginv-040  # new S3 folder name in bucket training_data_processed
     dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
 
+    train_offsets: [
+        # '230908',
+        # '231008',
+        # '231107',
+        # '231207',
+        # '240106',
+        # '240205',
+        # '240306',
+        # '240405',
+        # '240505',
+        # '240604',
+        # '240704',
+        # '240803',
+        # '240902',
+        # '241002',
+        '241101',
+        '241231',
+    ]
+    eval_offsets: [
+        '241201',
+        '250130',
+
+    ]
+    val_offsets: [
+        '250301',
+    ]
+
 preprocessing: #SageMaker
     fill_na:
         coin_trends: -1
