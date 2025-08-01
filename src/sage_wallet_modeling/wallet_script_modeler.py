@@ -1,17 +1,57 @@
-
-
 """
 Thin wrapper to launch SageMaker script-mode XGBoost training.
 """
 
 import logging
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Union
 
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+#   Shared helper functions for script-mode XGBoost training
+# ---------------------------------------------------------------------------
+def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, Union[int, float]]:
+    """
+    Remap and filter raw hyperparameters for script-mode.
+    """
+    hp: Dict[str, Union[int, float]] = {}
+    # remap rounds
+    if 'num_round' in raw_hp:
+        hp['num_boost_round'] = raw_hp['num_round']
+    elif 'num_boost_round' in raw_hp:
+        hp['num_boost_round'] = raw_hp['num_boost_round']
+
+    # allowed flags
+    allowed = {'num_boost_round', 'eta', 'max_depth', 'subsample', 'early_stopping_rounds', 'score_threshold'}
+    for key in allowed - {'num_boost_round'}:
+        if key in raw_hp:
+            hp[key] = raw_hp[key]
+
+    # warn unsupported
+    unsupported = set(raw_hp.keys()) - {'num_round', 'num_boost_round'} - allowed
+    if unsupported:
+        logger.warning(f"Ignoring unsupported hyperparameters: {unsupported}")
+    return hp
+
+
+
+
+def _build_job_name(prefix: str, upload_dir: str, suffix: str = None) -> str:
+    """
+    Build a unique SageMaker job name and return job_name.
+    """
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    parts = [prefix, upload_dir]
+    if suffix:
+        parts.append(suffix)
+    parts.append(ts)
+    job_name = "-".join(parts)
+    return job_name
 
 def train_single_period_script_model(
     wallets_config: Dict,
@@ -28,7 +68,6 @@ def train_single_period_script_model(
     - date_suffix (str): Date string like 'YYMMDD' indicating the training slice.
     - s3_uris (dict): Mapping from date_suffix to URIs for splits:
         {'train': ..., 'val' or 'eval': ..., ...}
-    - override_approvals (bool | None): If provided, skip confirmations (unused here).
 
     Returns:
     - dict: {
@@ -58,38 +97,8 @@ def train_single_period_script_model(
     upload_dir = wallets_config['training_data']['upload_directory']
     output_path = f"s3://{bucket}/model-outputs/{upload_dir}/{date_suffix}"
 
-    # Assemble job name
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    job_name = f"wallet-script-{upload_dir}-{date_suffix}-{timestamp}"
-
-    # Prepare hyperparameters for script-mode (match script CLI args)
-    raw_hp = modeling_config['training']['hyperparameters']
-    hp: Dict[str, float | int] = {}
-
-    # Remap 'num_round' → 'num_boost_round'
-    if 'num_round' in raw_hp:
-        hp['num_boost_round'] = raw_hp['num_round']
-    elif 'num_boost_round' in raw_hp:
-        hp['num_boost_round'] = raw_hp['num_boost_round']
-
-    # Copy only supported flags
-    for key in ('eta', 'max_depth', 'subsample', 'early_stopping_rounds', 'score_threshold'):
-        if key in raw_hp:
-            hp[key] = raw_hp[key]
-
-    # Warn about any unsupported hyperparameters
-    allowed_raw_keys = {
-        'num_round',
-        'num_boost_round',
-        'eta',
-        'max_depth',
-        'subsample',
-        'early_stopping_rounds',
-        'score_threshold'
-    }
-    unsupported = set(raw_hp.keys()) - allowed_raw_keys
-    if unsupported:
-        logger.warning(f"Ignoring unsupported hyperparameters for script-mode: {unsupported}")
+    # Prepare hyperparameters for script-mode
+    hp = _prepare_hyperparameters(modeling_config['training']['hyperparameters'])
 
     # Instantiate the XGBoost ScriptMode estimator
     estimator = XGBoost(
@@ -102,6 +111,9 @@ def train_single_period_script_model(
         hyperparameters=hp,
         output_path=output_path
     )
+
+    # Assemble job name
+    job_name = _build_job_name("wallet-script", upload_dir, date_suffix)
 
     # Prepare TrainingInput channels
     train_input = TrainingInput(s3_data=train_uri, content_type='text/csv')
