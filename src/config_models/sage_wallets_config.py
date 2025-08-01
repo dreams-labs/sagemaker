@@ -24,6 +24,7 @@ class SageWalletsConfig(NoExtrasBaseModel):
     preprocessing: 'PreprocessingConfig' = Field(...)
     workflow: 'WorkflowConfig' = Field(...)
     aws: 'AWSConfig' = Field(...)
+    script_mode: 'ScriptModeConfig' = Field(...)
     n_threads: 'NThreadsConfig' = Field(...)
 
 
@@ -107,6 +108,7 @@ class AWSConfig(NoExtrasBaseModel):
     Configuration for AWS settings.
     """
     training_bucket: str = Field(...)
+    script_model_bucket: str = Field(...)
     preprocessed_directory: str = Field(...)
     modeler_arn: str = Field(...)
 
@@ -127,7 +129,20 @@ class WorkflowConfig(NoExtrasBaseModel):
     """
     Configuration for workflow settings.
     """
-    override_existing_models: bool = Field(..., description="whether to train models for a date_suffix if one already exists")
+    override_existing_models: bool = Field(...,description="whether to train models "
+                                           "for a date_suffix if one already exists")
+
+
+# ----------------------------------------------------------------------------
+# Script Mode section
+# ----------------------------------------------------------------------------
+class ScriptModeConfig(NoExtrasBaseModel):
+    """
+    Configuration for script-mode training settings.
+    """
+    enabled: bool = Field(..., description="Whether to enable script-mode training")
+    entry_point: str = Field(..., description="Script entry point for training")
+    source_dir: str = Field(..., description="Path to source directory for script-mode training")
 
 
 # ============================================================================

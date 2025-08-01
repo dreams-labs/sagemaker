@@ -29,6 +29,9 @@ from sagemaker.predictor import Predictor
 from sagemaker.serializers import CSVSerializer
 from sagemaker.deserializers import JSONDeserializer
 
+# Script-mode launcher import
+from sage_wallet_modeling.wallet_script_modeler import launch_script_mode_job
+
 # Local module imports
 import utils as u
 from utils import ConfigError
@@ -121,6 +124,16 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name
         """
+        # If script-mode is enabled in config, delegate to the script-mode launcher
+        if self.wallets_config.get('script_mode', {}).get('enabled', False):
+            return launch_script_mode_job(
+                wallets_config=self.wallets_config,
+                modeling_config=self.modeling_config,
+                date_suffix=self.date_suffix,
+                s3_uris=self.s3_uris,
+                override_approvals=self.override_approvals
+            )
+
         logger.info("Starting SageMaker training sequence...")
 
         # Locate relevant S3 directories

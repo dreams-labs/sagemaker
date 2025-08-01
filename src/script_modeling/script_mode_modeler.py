@@ -116,7 +116,7 @@ def main() -> None:
 
 
     train_csv = Path("/opt/ml/input/data/train/train.csv")
-    val_csv = Path("/opt/ml/input/data/validation/val.csv")
+    val_csv = Path("/opt/ml/input/data/validation/eval.csv")
     training_matrix = load_csv_as_dmatrix(train_csv)
     validation_matrix = load_csv_as_dmatrix(val_csv)
 
@@ -158,4 +158,3 @@ def main() -> None:
 # Run the script when executed inside the container
 if __name__ == "__main__":
     main()
-
