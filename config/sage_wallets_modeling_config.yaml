@@ -26,5 +26,4 @@ training:
         early_stopping_rounds: 10
 
 predicting:
-    predict_method: endpoint  # endpoint or batch_transform
-    y_pred_threshold: 0.5 # predictions above this are positive
+    y_pred_threshold: 0.8 # predictions above this are positive

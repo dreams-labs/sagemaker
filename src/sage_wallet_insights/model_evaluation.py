@@ -46,7 +46,7 @@ def create_sagemaker_evaluator(
         Path(f"{wallets_config['training_data']['local_s3_root']}")
         / "s3_uploads"
         / "wallet_training_data_queue"
-        / f"{wallets_config['training_data']['local_directory']}"
+        / f"{wallets_config['training_data']['training_data_directory']}"
     )
     X_train = pd.read_parquet(training_data_path / f"x_train_{date_suffix}.parquet")
     y_train = pd.read_parquet(training_data_path / f"y_train_{date_suffix}.parquet")
