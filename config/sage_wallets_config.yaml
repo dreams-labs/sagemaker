@@ -25,11 +25,13 @@ aws: #SageMaker
     training_bucket: wallet-training-data
     script_model_bucket: wallet-script-models
     preprocessed_directory: training-data-preprocessed
+    temporal_cv_directory: training-data-temporal-cvs
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
 
 script_mode: #SageMaker
     enabled: True
-    entry_point: script_mode_modeler.py
+    # entry_point: single_model_entry.py
+    entry_point: temporal_cv_model_entry.py
     source_dir: ../src/script_modeling
 
 n_threads: #SageMaker

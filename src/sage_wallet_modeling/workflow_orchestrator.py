@@ -17,6 +17,8 @@ from botocore.exceptions import ClientError
 # Local modules
 from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
 from sage_wallet_modeling.wallet_modeler import WalletModeler
+# For cross-date CV training
+import sage_wallet_modeling.wallet_script_modeler as sm
 import sage_wallet_insights.model_evaluation as sime
 import utils as u
 import sage_utils.config_validation as ucv
@@ -343,6 +345,112 @@ class WalletWorkflowOrchestrator:
 
         logger.info(f"All {len(training_results)} models trained successfully.")
         return training_results
+
+
+    def train_temporal_cv_model(self, date_suffixes: list[str]) -> dict:
+        """
+        Train a cross-date CV model: each date_suffix is treated as one fold.
+
+        Workflow:
+        1. Retrieve S3 URIs for all date_suffixes.
+        2. Stage combined CV files to S3 via upload_temporal_cv_files().
+        3. Launch a single script-mode CV job to train across folds.
+        4. Return the training job result.
+
+        Params:
+        - date_suffixes (list[str]): List of date suffix strings.
+
+        Returns:
+        - dict: Contains model URI, training_job_name, and date_suffixes.
+        """
+        # 1. Get URIs for all dates
+        s3_uris = self.retrieve_training_data_uris(date_suffixes)
+
+        # 2. Upload temporal CV files and get root S3 URI
+        cv_s3_uri = self.compile_temporal_cv_files(date_suffixes, s3_uris)
+
+        # 3. Launch the CV training job
+        result = sm.train_single_period_script_model(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            cv_s3_uri=cv_s3_uri,
+            override_approvals=self.wallets_config['workflow']['override_existing_models']
+        )
+
+        # 4. Return the job metadata
+        return {
+            'model_uri': result.get('model_uri'),
+            'training_job_name': result.get('training_job_name'),
+            'date_suffixes': date_suffixes
+        }
+
+
+    def compile_temporal_cv_files(
+            self,
+            date_suffixes: list[str],
+            s3_uris: dict[str, dict[str, str]]
+        ) -> str:
+        """
+        Copy per-period train/eval CSVs into a cross-date CV folder in S3.
+
+        Returns:
+        - str: S3 URI of the root CV folder.
+        """
+        s3_client = boto3.client("s3")
+        bucket = self.wallets_config['aws']['training_bucket']
+        temporal_prefix = self.wallets_config['aws']['temporal_cv_directory']
+        # Use a deterministic folder based on upload_directory
+        upload_dir = self.wallets_config['training_data']['upload_directory']
+        cv_prefix = f"{temporal_prefix}/{upload_dir}"
+
+        # Check if CV folder already exists in S3
+        existing = s3_client.list_objects_v2(
+            Bucket=bucket, Prefix=cv_prefix + '/'
+        ).get('KeyCount', 0) > 0
+        if existing:
+            msg = f"s3://{bucket}/{cv_prefix}/ already exists. Overwrite existing CV files?"
+            overwrite_all = u.request_confirmation(msg)
+        else:
+            overwrite_all = True
+
+        uploaded_count = 0
+        for suffix in date_suffixes:
+            fold_prefix = f"{cv_prefix}/fold_{suffix}"
+            # For train.csv
+            src_train_uri = s3_uris[suffix]['train']
+            src_train_key = src_train_uri.replace(f"s3://{bucket}/", "")
+            dest_train_key = f"{fold_prefix}/train.csv"
+            try:
+                s3_client.head_object(Bucket=bucket, Key=dest_train_key)
+                exists = True
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    exists = False
+                else:
+                    raise
+            if not exists or overwrite_all:
+                s3_client.copy({'Bucket': bucket, 'Key': src_train_key}, bucket, dest_train_key)
+                uploaded_count += 1
+
+            # For validation.csv
+            src_eval_uri = s3_uris[suffix]['eval']
+            src_eval_key = src_eval_uri.replace(f"s3://{bucket}/", "")
+            dest_eval_key = f"{fold_prefix}/validation.csv"
+            try:
+                s3_client.head_object(Bucket=bucket, Key=dest_eval_key)
+                exists = True
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    exists = False
+                else:
+                    raise
+            if not exists or overwrite_all:
+                s3_client.copy({'Bucket': bucket, 'Key': src_eval_key}, bucket, dest_eval_key)
+                uploaded_count += 1
+
+        logger.info(f"Uploaded {uploaded_count} CV files to s3://{bucket}/{cv_prefix}")
+        # Return the S3 URI for the CV folder
+        return f"s3://{bucket}/{cv_prefix}"
 
 
     def predict_with_all_models(
