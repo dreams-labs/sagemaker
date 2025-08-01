@@ -29,14 +29,12 @@ from sagemaker.predictor import Predictor
 from sagemaker.serializers import CSVSerializer
 from sagemaker.deserializers import JSONDeserializer
 
-# Script-mode launcher import
-from sage_wallet_modeling.wallet_script_modeler import launch_script_mode_job
-
 # Local module imports
 import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
 import sage_utils.s3_utils as s3u
+import sage_wallet_modeling.wallet_script_modeler as sm
 
 
 # Set up logger at the module level
@@ -126,7 +124,7 @@ class WalletModeler:
         """
         # If script-mode is enabled in config, delegate to the script-mode launcher
         if self.wallets_config.get('script_mode', {}).get('enabled', False):
-            return launch_script_mode_job(
+            return sm.train_single_period_script_model(
                 wallets_config=self.wallets_config,
                 modeling_config=self.modeling_config,
                 date_suffix=self.date_suffix,

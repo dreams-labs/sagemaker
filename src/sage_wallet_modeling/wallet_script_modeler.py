@@ -13,12 +13,11 @@ from sagemaker.xgboost import XGBoost
 
 logger = logging.getLogger(__name__)
 
-def launch_script_mode_job(
+def train_single_period_script_model(
     wallets_config: Dict,
     modeling_config: Dict,
     date_suffix: str,
     s3_uris: Dict[str, Dict[str, str]],
-    override_approvals: Optional[bool] = None
 ) -> Dict[str, str]:
     """
     Launch a SageMaker script-mode XGBoost training job.
