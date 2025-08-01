@@ -1,5 +1,9 @@
 """
 Script-mode entry point for cross-date temporal CV training.
+
+As of now it trains n different models, where n is each date_suffix provided
+ in the opt/ml/input/data directory. There is not yet logic to assess the best
+ hyperparameters across all periods on average.
 """
 
 import os
@@ -15,10 +19,6 @@ def main() -> None:
     Loop over folds in /opt/ml/input/data/cv, train and evaluate each,
     compute mean PR-AUC, and save the best model.
     """
-    # Determine CV fold directories under the CV channel mount
-    cv_root = Path("/opt/ml/input/data/cv")
-    fold_dirs = sorted([d for d in cv_root.iterdir() if d.is_dir() and d.name.startswith("fold_")])
-
     # Parse training hyperparameters injected via SageMaker CLI
     args = h.load_hyperparams()
 
@@ -26,6 +26,10 @@ def main() -> None:
     best_score = -float("inf")
     best_model = None
     scores = []
+
+    # Determine CV fold directories under the CV channel mount
+    cv_root = Path("/opt/ml/input/data/cv")
+    fold_dirs = sorted([d for d in cv_root.iterdir() if d.is_dir() and d.name.startswith("fold_")])
 
     for fold_dir in fold_dirs:
 
