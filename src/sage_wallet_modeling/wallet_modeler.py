@@ -796,7 +796,7 @@ class WalletModeler:
         transformer = Transformer(
             model_name=model_name,
             instance_count=self.modeling_config['metaparams']['instance_count'],
-            instance_type=self.modeling_config['metaparams']['instance_type'],
+            instance_type=self.modeling_config['metaparams']['batch_trans_instance_type'],
             output_path=output_path,
             sagemaker_session=self.sagemaker_session
         )
