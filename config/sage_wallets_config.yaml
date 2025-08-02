@@ -100,6 +100,12 @@ training_data: #SageMaker
         '250130',
         '250301',
     ]
+    val_offsets: [
+        '250331',
+        '250430',
+        '250530',
+        '250629'
+    ]
 
 preprocessing: #SageMaker
     fill_na:
