@@ -140,7 +140,127 @@ def create_sagemaker_evaluator(
     return wallet_evaluator
 
 
+def create_concatenated_sagemaker_evaluator(
+    wallets_config: dict,
+    modeling_config: dict,
+    y_test_pred: pd.Series
+) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
+    """
+    Create a SageMaker evaluator for concatenated model results (test-only evaluation).
 
+    Simplified version of create_sagemaker_evaluator() that handles:
+    - Concatenated training data structure (no date suffixes)
+    - Test-only evaluation (no validation set required)
+    - Different file loading patterns
+
+    Params:
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration for model parameters
+    - y_test_pred (pd.Series): Predicted values for the concatenated test set
+
+    Returns:
+    - RegressorEvaluator or ClassifierEvaluator: Configured evaluator ready for analysis
+    """
+    # 1. Load concatenated training data
+    # ----------------------------------
+    model_type = modeling_config['training']['model_type']
+
+    # For concatenated data, load from the concatenated CSV structure
+    base_dir = Path(f"{wallets_config['training_data']['local_s3_root']}")
+    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
+    local_dir = wallets_config["training_data"]["local_directory"]
+    dataset = wallets_config['training_data'].get('dataset', 'dev')
+    if dataset == 'dev':
+        local_dir = f"{local_dir}_dev"
+
+    data_path = concat_dir / local_dir
+
+    # Load concatenated CSVs (these have target as first column, no headers)
+    train_df = pd.read_csv(data_path / "train.csv", header=None)
+    test_df = pd.read_csv(data_path / "test.csv", header=None)
+
+    # Split into X and y (target is first column)
+    y_train = train_df.iloc[:, 0]
+    X_train = train_df.iloc[:, 1:]
+    y_test = test_df.iloc[:, 0]
+    X_test = test_df.iloc[:, 1:]
+
+    # Convert column names to strings to avoid iteration errors in evaluator
+    X_train.columns = [f'feature_{i}' for i in range(len(X_train.columns))]
+    X_test.columns = [f'feature_{i}' for i in range(len(X_test.columns))]
+
+    # Assign proper index to predictions
+    y_test_pred = assign_index_to_pred(y_test_pred, pd.DataFrame(y_test))
+
+    # 2. Prepare wime modeling config
+    # -------------------------------
+    wime_modeling_config = {
+        'target_variable': 'target',  # Generic name for concatenated data
+        'model_type': model_type,
+        'returns_winsorization': 0.005,
+        'training_data': {
+            'modeling_period_duration': 30
+        },
+        'sagemaker_metadata': {
+            'local_directory': local_dir,
+            'date_suffix': 'concat'
+        }
+    }
+
+    # 3. Handle classification
+    # ------------------------
+    if model_type == 'classification':
+        y_pred_thresh = modeling_config['predicting']['y_pred_threshold']
+        wime_modeling_config['y_pred_threshold'] = y_pred_thresh
+
+        # Store probabilities before thresholding
+        y_pred_proba = y_test_pred.copy()
+
+        # Apply threshold to get binary predictions
+        y_test_pred = (y_test_pred > y_pred_thresh).astype(int)
+
+    # 4. Prepare model results (test-only version)
+    # --------------------------------------------
+    model_id = f"sagemaker_concat_{local_dir}"
+
+    wallet_model_results = {
+        'model_id': model_id,
+        'modeling_config': wime_modeling_config,
+        'model_type': model_type,
+
+        # Training data
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test,
+        'y_pred': y_test_pred,
+        'training_cohort_pred': None,
+        'training_cohort_actuals': None,
+
+        # No validation data for concatenated model
+        'X_validation': None,
+        'y_validation': None,
+        'y_validation_pred': None,
+        'validation_target_vars_df': None,
+
+        # Mock pipeline
+        'pipeline': create_mock_pipeline(model_type)
+    }
+
+    if model_type == 'classification':
+        wallet_model_results['y_pred_proba'] = y_pred_proba
+        wallet_model_results['y_validation_pred_proba'] = None
+
+    # 5. Create and return evaluator
+    # ------------------------------
+    if model_type == 'regression':
+        wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
+    elif model_type == 'classification':
+        wallet_evaluator = wime.ClassifierEvaluator(wallet_model_results)
+    else:
+        raise ConfigError(f"Unknown model type {model_type} found in config.")
+
+    return wallet_evaluator
 
 
 # --------------------------
