@@ -112,7 +112,7 @@ def train_single_period_script_model(
     )
 
     # Assemble job name
-    job_name = _build_job_name("wallet-script", upload_dir, date_suffix)
+    job_name = _build_job_name("wscript", upload_dir, date_suffix)
 
     # Prepare TrainingInput channels
     train_input = TrainingInput(s3_data=train_uri, content_type='text/csv')
