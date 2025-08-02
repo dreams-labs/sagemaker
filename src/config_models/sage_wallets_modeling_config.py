@@ -46,16 +46,12 @@ class FrameworkConfig(BaseModel):
 
 # [Metaparams]
 # ------------
-class InstanceType(str, Enum):
-    """Supported AWS instance types."""
-    ML_M5_LARGE = "ml.m5.large"
-
 class MetaparamsConfig(BaseModel):
     """
     Configuration for metaparameters.
     """
     endpoint_preds_dir: str = Field(...)
-    instance_type: InstanceType = Field(...)
+    instance_type: str = Field(...)
     instance_count: int = Field(...)
 
 

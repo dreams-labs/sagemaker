@@ -41,7 +41,7 @@ class TrainingDataConfig(BaseModel):
     dataset: str = Field(...)
     train_offsets: List[str] = Field(...)
     eval_offsets: List[str] = Field(...)
-    val_offsets: List[str] = Field(...)
+    test_offsets: List[str] = Field(...)
 
     @field_validator('local_directory')
     @classmethod
@@ -114,6 +114,7 @@ class AWSConfig(NoExtrasBaseModel):
     training_bucket: str = Field(...)
     script_model_bucket: str = Field(...)
     preprocessed_directory: str = Field(...)
+    concatenated_directory: str = Field(...)
     temporal_cv_directory: str = Field(...)
     modeler_arn: str = Field(...)
 
