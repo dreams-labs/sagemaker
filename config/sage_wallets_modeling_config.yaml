@@ -5,7 +5,7 @@ framework:
 
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
-    instance_type: ml.m5.large
+    instance_type: ml.c6i.4xlarge
     instance_count: 1
 
 target:
@@ -18,12 +18,12 @@ training:
 
     #KeyParam Hyperparameters
     hyperparameters:
-        num_round: 100
+        num_round: 500
         max_depth: 6
-        eta: 0.3
-        subsample: 0.8
-        colsample_bytree: 0.8
-        early_stopping_rounds: 10
+        eta: 0.1
+        subsample: 1.0
+        colsample_bytree: 0.9
+        early_stopping_rounds: 15
 
 predicting:
     y_pred_threshold: 0.8 # predictions above this are positive

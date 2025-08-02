@@ -3,9 +3,101 @@
 training_data: #SageMaker
     local_s3_root: ../  # where s3_uploads and s3_downloads exist
     training_data_directory: dda_897_td_column_ordering_v1  # where to load local csvs from
-    local_directory: dda_920_eval_models_nginv_040  # where to store local artifacts
-    upload_directory: dda-920-nginv-040  # new S3 folder name in bucket training_data_processed
-    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
+    local_directory: dda_927_concat_offsets  # where to store local artifacts
+    upload_directory: dda-928-concat-allo  # new S3 folder name in bucket training_data_processed
+    dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
+
+    # train_offsets: [
+    #     # '230908',
+    #     # '231008',
+    #     # '231107',
+    #     # '231207',
+    #     # '240106',
+    #     # '240205',
+    #     # '240306',
+    #     # '240405',
+    #     # '240505',
+    #     # '240604',
+    #     # '240704',
+    #     # '240803',
+    #     # '240902',
+    #     # '241002',
+    #     '241101',
+    #     '241231',
+    # ]
+    # eval_offsets: [
+    #     '241201',
+    #     '250130',
+
+    # ]
+    # test_offsets: [
+    #     '250301',
+    # ]
+
+
+    train_offsets: [
+        '230908',
+        '231008',
+        '231107',
+        '231207',
+        '240106',
+        '240205',
+        '240306',
+        '240405',
+        '240505',
+        '240604',
+        '240704',
+        '240803',
+        '240902',
+        '241002',
+        '241201',
+        '241101',
+        '241231',
+        '250130',
+        '250301',
+    ]
+    eval_offsets: [
+        '230908',
+        '231008',
+        '231107',
+        '231207',
+        '240106',
+        '240205',
+        '240306',
+        '240405',
+        '240505',
+        '240604',
+        '240704',
+        '240803',
+        '240902',
+        '241002',
+        '241201',
+        '241101',
+        '241231',
+        '250130',
+        '250301',
+    ]
+    test_offsets: [
+        '230908',
+        '231008',
+        '231107',
+        '231207',
+        '240106',
+        '240205',
+        '240306',
+        '240405',
+        '240505',
+        '240604',
+        '240704',
+        '240803',
+        '240902',
+        '241002',
+        '241201',
+        '241101',
+        '241231',
+        '250130',
+        '250301',
+    ]
 
 preprocessing: #SageMaker
     fill_na:
@@ -25,13 +117,14 @@ aws: #SageMaker
     training_bucket: wallet-training-data
     script_model_bucket: wallet-script-models
     preprocessed_directory: training-data-preprocessed
+    concatenated_directory: training-data-concatenated
     temporal_cv_directory: training-data-temporal-cvs
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
 
 script_mode: #SageMaker
     enabled: True
-    # entry_point: single_model_entry.py
-    entry_point: temporal_cv_model_entry.py
+    entry_point: single_model_entry.py
+    # entry_point: temporal_cv_model_entry.py
     source_dir: ../src/script_modeling
 
 n_threads: #SageMaker

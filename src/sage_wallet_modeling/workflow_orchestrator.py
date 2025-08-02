@@ -191,6 +191,126 @@ class WalletWorkflowOrchestrator:
         logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates.")
 
 
+    def concatenate_all_preprocessed_data(self) -> None:
+        """
+        Concatenate preprocessed CSVs across configured offsets for each split and
+        save combined CSVs to the concatenated output directory.
+        Params:
+        - split_names (List[str]): List of splits to concatenate (e.g., ['train', 'eval', 'test']).
+        """
+        logger.info("Beginning concatenation of preprocessed data...")
+
+        # Load all preprocessed splits into memory
+        data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
+
+        # Determine offsets for each split from config
+        offsets_map = {
+            'train': self.wallets_config['training_data'].get('train_offsets', []),
+            'eval':  self.wallets_config['training_data'].get('eval_offsets', []),
+            'test':  self.wallets_config['training_data'].get('test_offsets', []),
+        }
+
+        # Build concatenation output directory alongside the preprocessed tree
+        # (mirrors preprocessed path but under "wallet_training_data_concatenated")
+        base_dir = Path(self.wallets_config['training_data']['local_s3_root']) \
+                   / "s3_uploads" \
+                   / "wallet_training_data_concatenated"
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        if self.dataset == 'dev':
+            local_dir = f"{local_dir}_dev"
+        concat_base = base_dir / local_dir
+        concat_base.mkdir(parents=True, exist_ok=True)
+
+        for split, offsets in offsets_map.items():
+            if not offsets:
+                logger.warning(f"No offsets configured for split '{split}'")
+                continue
+
+            dfs = []
+            for offset in offsets:
+                # Each offset is sampled only once for the configured split, to avoid duplication.
+                # Load the configured split CSV for this offset
+                if split not in data_by_date[offset]:
+                    raise KeyError(f"No '{split}' split found for offset {offset}")
+                df = data_by_date[offset][split]
+                dfs.append(df)
+
+            if not dfs:
+                logger.warning(f"No data found for split '{split}' across offsets {offsets}")
+                continue
+
+            concatenated = pd.concat(dfs, ignore_index=True)
+            out_file = concat_base / f"{split}.csv"
+            concatenated.to_csv(out_file, index=False, header=False)
+            logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
+
+
+    @u.timing_decorator
+    def upload_concatenated_training_data(self, overwrite_existing: bool = False) -> dict[str, str]:
+        """
+        Upload concatenated training data splits to S3, organized under a single folder.
+        Params:
+        - overwrite_existing (bool): If True, overwrites existing S3 objects.
+        Returns:
+        - dict: Mapping of split_name to S3 URI for uploaded concatenated data.
+        """
+        # Determine S3 target paths
+        bucket = self.wallets_config['aws']['training_bucket']
+        # Use configured concatenated directory
+        base_folder = self.wallets_config['aws']['concatenated_directory']
+        upload_directory = self.wallets_config['training_data']['upload_directory']
+        if self.dataset == 'dev':
+            upload_directory = f"{upload_directory}-dev"
+        folder_prefix = f"{upload_directory}/"
+
+        s3_client = boto3.client('s3')
+        upload_results = {}
+
+        # Local concatenated directory
+        concat_root = Path(self.wallets_config['training_data']['local_s3_root']) \
+                      / "s3_uploads" \
+                      / "wallet_training_data_concatenated"
+        local_dir = self.wallets_config["training_data"]["local_directory"]
+        if self.dataset == 'dev':
+            local_dir = f"{local_dir}_dev"
+        concat_dir = concat_root / local_dir
+
+        splits = ['train', 'eval', 'test']
+        logger.info("Beginning upload of concatenated training data...")
+        for split in splits:
+            local_file = concat_dir / f"{split}.csv"
+            if not local_file.exists():
+                raise FileNotFoundError(f"Concatenated file not found: {local_file}")
+            # Read for validation
+            df = pd.read_csv(local_file, header=None)
+            # Optional CSV-safety check
+            self._validate_csv_safety(df, split)
+
+            # Build S3 key
+            s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
+            s3_uri = f"s3://{bucket}/{s3_key}"
+
+            if not overwrite_existing:
+                try:
+                    s3_client.head_object(Bucket=bucket, Key=s3_key)
+                    logger.info(f"File exists, skipping upload of concatenated split '{split}': {s3_key}")
+                    upload_results[split] = s3_uri
+                    continue
+                except ClientError:
+                    pass
+
+            # Upload
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+                df.to_csv(tmp.name, index=False, header=False)
+                temp_path = tmp.name
+            s3_client.upload_file(temp_path, bucket, s3_key)
+            os.unlink(temp_path)
+            logger.info(f"Uploaded concatenated split '{split}' to {s3_uri}")
+            upload_results[split] = s3_uri
+
+        return upload_results
+
+
     def upload_all_training_data(self, overwrite_existing: bool = False):
         """
         Upload preprocessed training data splits to S3, organized by date suffix folders.
@@ -453,6 +573,7 @@ class WalletWorkflowOrchestrator:
         return f"s3://{bucket}/{cv_prefix}"
 
 
+    @u.timing_decorator
     def predict_with_all_models(
             self,
             dataset_types: list = None,
@@ -506,6 +627,50 @@ class WalletWorkflowOrchestrator:
 
         logger.milestone(f"All {len(prediction_results)} models generated predictions successfully.")
         return prediction_results
+
+
+    @u.timing_decorator
+    def train_concatenated_offsets_model(self, overwrite_existing: bool = False) -> dict:
+        """
+        Build a full-history model by concatenating all offsets, uploading the
+        combined CSVs, and training one XGBoost job on train/eval from that set.
+        Returns the training job metadata.
+        """
+        # Initialize date_suffixes for concatenation based on config offsets
+        train_offsets = self.wallets_config['training_data'].get('train_offsets', [])
+        eval_offsets  = self.wallets_config['training_data'].get('eval_offsets', [])
+        test_offsets  = self.wallets_config['training_data'].get('test_offsets', [])
+        # Use all offsets that have preprocessed CSVs available
+        self.date_suffixes = list(dict.fromkeys(train_offsets + eval_offsets + test_offsets))
+
+        # 1) Concatenate locally
+        self.concatenate_all_preprocessed_data()
+
+        # 2) Push to S3
+        upload_results = self.upload_concatenated_training_data(overwrite_existing=overwrite_existing)
+        # upload_results: {'train': s3://…/train.csv, 'eval': s3://…/eval.csv, 'test': …}
+
+        # 3) Prepare s3_uris dict keyed by our special suffix
+        synthetic_suffix = 'concat'
+        s3_uris = {
+            synthetic_suffix: {
+                'train': upload_results['train'],
+                'eval':  upload_results['eval']
+            }
+        }
+
+        # 4) Launch training via WalletModeler
+        modeler = WalletModeler(
+            wallets_config   = self.wallets_config,
+            modeling_config = self.modeling_config,
+            date_suffix     = synthetic_suffix,
+            s3_uris         = s3_uris,
+            override_approvals = overwrite_existing
+        )
+        result = modeler.train_model()  # fits on train and early-stops on eval
+
+        # 5) Return metadata for downstream (e.g. test scoring)
+        return result
 
 
     def evaluate_all_models(self):
