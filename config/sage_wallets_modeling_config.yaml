@@ -7,6 +7,8 @@ metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
     instance_type: ml.c6i.4xlarge
     instance_count: 1
+    batch_trans_instance_type: ml.c4.8xlarge
+    batch_trans_instance_count: 1
 
 target:
     classification:
