@@ -188,12 +188,26 @@ class WalletModeler:
     def load_existing_model(self):
         """
         Load the most recent trained model for a given date_suffix.
+        Handles both container-mode and script-mode model storage patterns.
 
         Returns:
         - dict: Contains model URI and training job name of most recent model
         """
-        bucket_name = self.wallets_config['aws']['training_bucket']
-        base_prefix = f"sagemaker-models/{self.upload_directory}/"
+        # Check if script-mode is enabled
+        script_mode_enabled = self.wallets_config.get('script_mode', {}).get('enabled', False)
+
+        if script_mode_enabled:
+            # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
+            bucket_name = self.wallets_config['aws']['script_model_bucket']
+            base_prefix = f"model-outputs/{self.upload_directory}/{self.date_suffix}/"
+            job_name_pattern = f"wscript-{self.upload_directory}-{self.date_suffix}-"
+            model_file_path = "output/model.tar.gz"
+        else:
+            # Container-mode path: s3://{training_bucket}/sagemaker-models/{upload_directory}/
+            bucket_name = self.wallets_config['aws']['training_bucket']
+            base_prefix = f"sagemaker-models/{self.upload_directory}/"
+            job_name_pattern = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-"
+            model_file_path = "output/model.tar.gz"
 
         # List all objects under the upload folder
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -206,15 +220,15 @@ class WalletModeler:
             )
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchBucket':
-                raise FileNotFoundError(f"Training bucket does not exist: {bucket_name}") from e
+                raise FileNotFoundError(f"Model bucket does not exist: {bucket_name}") from e
             else:
                 raise ConfigError(f"Unable to access S3 bucket {bucket_name}: {e}") from e
 
         if 'CommonPrefixes' not in response:
-            raise FileNotFoundError(f"No models found under path: s3://{bucket_name}/{base_prefix}")
+            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
+            raise FileNotFoundError(f"No {mode_desc} models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
-        job_name_pattern = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-"
         matching_folders = []
 
         for prefix_info in response['CommonPrefixes']:
@@ -227,7 +241,8 @@ class WalletModeler:
                 matching_folders.append((timestamp_part, folder_name, folder_path))
 
         if not matching_folders:
-            raise FileNotFoundError(f"No models found for upload_directory '{self.upload_directory}' "
+            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
+            raise FileNotFoundError(f"No {mode_desc} models found for upload_directory '{self.upload_directory}' "
                                     f"and date_suffix '{self.date_suffix}' "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
@@ -236,8 +251,8 @@ class WalletModeler:
         most_recent_timestamp, most_recent_job_name, most_recent_folder_path = matching_folders[0]
 
         # Construct model URI and validate it exists
-        model_uri = f"s3://{bucket_name}/{most_recent_folder_path}output/model.tar.gz"
-        model_s3_key = f"{most_recent_folder_path}output/model.tar.gz"
+        model_uri = f"s3://{bucket_name}/{most_recent_folder_path}{model_file_path}"
+        model_s3_key = f"{most_recent_folder_path}{model_file_path}"
 
         try:
             s3_client.head_object(Bucket=bucket_name, Key=model_s3_key)
@@ -251,7 +266,8 @@ class WalletModeler:
         # Store model artifacts
         self.model_uri = model_uri
 
-        logger.info(f"Loaded most recent model (timestamp: {most_recent_timestamp}): {model_uri}")
+        mode_desc = "script-mode" if script_mode_enabled else "container-mode"
+        logger.info(f"Loaded most recent {mode_desc} model (timestamp: {most_recent_timestamp}): {model_uri}")
 
         return {
             'model_uri': model_uri,
