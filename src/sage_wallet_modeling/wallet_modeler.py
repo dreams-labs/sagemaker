@@ -86,12 +86,16 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
-        # Validate date_suffix format
-        try:
-            datetime.strptime(date_suffix, "%y%m%d")
-        except ValueError as exc:
-            raise ValueError(f"Invalid date_suffix format: {date_suffix}. "
-                             "Expected 'YYMMDD'.") from exc
+        # Validate date_suffix format, but allow synthetic suffixes
+        allowed_synthetic = {'concat'}
+        if date_suffix not in allowed_synthetic:
+            try:
+                datetime.strptime(date_suffix, "%y%m%d")
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid date_suffix format: {date_suffix}. "
+                    "Expected 'YYMMDD' or one of " + ", ".join(allowed_synthetic)
+                ) from exc
 
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
@@ -129,7 +133,6 @@ class WalletModeler:
                 modeling_config=self.modeling_config,
                 date_suffix=self.date_suffix,
                 s3_uris=self.s3_uris,
-                override_approvals=self.override_approvals
             )
 
         logger.info("Starting SageMaker training sequence...")
