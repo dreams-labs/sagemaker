@@ -364,34 +364,42 @@ class WalletWorkflowOrchestrator:
     def retrieve_training_data_uris(self, date_suffixes: list):
         """
         Generate S3 URIs for training data by finding files that match split patterns.
-        Validates files exist and handles target-variable-enhanced filenames.
+        Handles both preprocessed (per-date folders) and concatenated (flat) structures.
 
         Params:
         - date_suffixes (list): List of date suffixes (e.g., ["231107", "231201"])
+                            For concatenated data, use ["concat"]
 
         Returns:
         - dict: S3 URIs for each date suffix and data split
-
-        Raises:
-        - FileNotFoundError: If any expected S3 objects don't exist
-        - ValueError: If multiple files match the same split pattern
         """
         if not date_suffixes:
             raise ValueError("date_suffixes cannot be empty")
+
+        # Check if we're using concatenated directory structure
+        use_concatenated = self.wallets_config['training_data'].get('concatenate_offsets', False)
 
         # Get S3 file locations
         bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
 
         s3_client = boto3.client('s3')
         s3_uris = {}
-        splits = ['train', 'test', 'eval', 'val']  # Preprocessed files combine x and y
+        splits = ['train', 'test', 'eval', 'val']
 
         for date_suffix in date_suffixes:
             date_uris = {}
 
             for split_name in splits:
-                # List objects with the split prefix
-                prefix = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}"
+                if use_concatenated:
+                    # Concatenated structure: files directly under upload directory
+                    # Path: s3://bucket/concatenated/{upload_dir}/train.csv
+                    prefix = f"{base_folder}/{folder_prefix}{split_name}"
+                    expected_filename = f"{split_name}.csv"
+                else:
+                    # Preprocessed structure: files in date-specific subdirectories
+                    # Path: s3://bucket/preprocessed/{upload_dir}/{date_suffix}/train.csv
+                    prefix = f"{base_folder}/{folder_prefix}{date_suffix}/{split_name}"
+                    expected_filename = f"{split_name}"  # Original logic for preprocessed
 
                 try:
                     response = s3_client.list_objects_v2(
@@ -400,23 +408,32 @@ class WalletWorkflowOrchestrator:
                     )
 
                     if 'Contents' not in response:
-                        raise FileNotFoundError("No S3 objects found matching prefix: "
-                                                f"s3://{bucket_name}/{prefix}")
+                        logger.warning("No S3 objects found matching prefix: "
+                                       f"s3://{bucket_name}/{prefix}")
+                        continue
 
-                    # Filter for CSV files that start with the exact split name
-                    matching_objects = [
-                        obj for obj in response['Contents']
-                        if obj['Key'].split('/')[-1].startswith(f"{split_name}") and obj['Key'].endswith('.csv')
-                    ]
+                    if use_concatenated:
+                        # For concatenated, look for exact filename match
+                        matching_objects = [
+                            obj for obj in response['Contents']
+                            if obj['Key'].split('/')[-1] == expected_filename
+                        ]
+                    else:
+                        # Original logic for preprocessed files
+                        matching_objects = [
+                            obj for obj in response['Contents']
+                            if obj['Key'].split('/')[-1].startswith(f"{split_name}") and obj['Key'].endswith('.csv')
+                        ]
 
                     if len(matching_objects) == 0:
-                        raise FileNotFoundError(f"No CSV files found starting with '{split_name}' "
+                        structure_type = "concatenated" if use_concatenated else "preprocessed"
+                        raise FileNotFoundError(f"No {structure_type} CSV files found for '{split_name}' "
                                                 f"at: s3://{bucket_name}/{prefix}")
 
                     if len(matching_objects) > 1:
                         matching_files = [obj['Key'].split('/')[-1] for obj in matching_objects]
                         raise ValueError(f"Multiple files found for split '{split_name}' in "
-                                         f"{date_suffix}: {matching_files}")
+                                        f"{date_suffix}: {matching_files}")
 
                     # Use the actual filename found
                     s3_key = matching_objects[0]['Key']
@@ -992,12 +1009,21 @@ class WalletWorkflowOrchestrator:
     def _get_s3_upload_paths(self) -> tuple[str, str, str]:
         """
         Get S3 bucket, base folder, and upload folder prefix for training data.
+        Automatically switches between preprocessed and concatenated directories
+        based on concatenate_offsets config flag.
 
         Returns:
         - tuple: (bucket_name, base_folder, folder_prefix)
         """
         bucket_name = self.wallets_config['aws']['training_bucket']
-        base_folder = self.wallets_config['aws']['preprocessed_directory']
+
+        # Check if we should use concatenated directory instead of preprocessed
+        use_concatenated = self.wallets_config['training_data'].get('concatenate_offsets', False)
+
+        if use_concatenated:
+            base_folder = self.wallets_config['aws']['concatenated_directory']
+        else:
+            base_folder = self.wallets_config['aws']['preprocessed_directory']
 
         upload_directory = self.wallets_config['training_data']['upload_directory']
         dataset = self.wallets_config['training_data'].get('dataset', 'prod')
