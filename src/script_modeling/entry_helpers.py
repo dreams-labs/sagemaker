@@ -34,6 +34,8 @@ def load_hyperparams() -> argparse.Namespace:
                         help="Number of boosting rounds")
     parser.add_argument("--early_stopping_rounds", type=int, default=30,
                         help="Rounds for early stopping on validation set")
+    parser.add_argument("--colsample_bytree", type=float, default=0.9,
+                        help="Rounds for early stopping on validation set")
     parser.add_argument("--score_threshold", type=float, default=0.80,
                         help="Placeholder threshold for business logic filtering")
     return parser.parse_args()
@@ -79,6 +81,7 @@ def build_booster_params(args: argparse.Namespace) -> dict:
         "eta": args.eta,
         "max_depth": args.max_depth,
         "subsample": args.subsample,
+        "colsample_bytree": args.colsample_bytree,
         "seed": 42,
     }
 
