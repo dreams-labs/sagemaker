@@ -21,6 +21,7 @@ class SageWalletsModelingConfig(NoExtrasBaseModel):
     """Top-level structure of the main sagemaker_modeling_config.yaml file."""
     framework: 'FrameworkConfig' = Field(...)
     metaparams: 'MetaparamsConfig' = Field(...)
+    script_mode: 'ScriptModeConfig' = Field(...)
     target: 'TargetConfig' = Field(...)
     training: 'TrainingConfig' = Field(...)
     predicting: 'PredictingConfig' = Field(...)
@@ -64,6 +65,17 @@ class MetaparamsConfig(BaseModel):
         if '-' in v:
             raise ValueError(f"Invalid endpoint_preds_dir value '{v}' contains hyphens. "
                               "Local folders should use underscores instead of hyphens.")
+
+
+# [Script_mode]
+# -------------
+class ScriptModeConfig(NoExtrasBaseModel):
+    """
+    Configuration for script-mode training settings.
+    """
+    enabled: bool = Field(..., description="Whether to enable script-mode training")
+    entry_point: str = Field(..., description="Script entry point for training")
+    source_dir: str = Field(..., description="Path to source directory for script-mode training")
 
 
 # [Training]

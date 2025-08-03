@@ -10,6 +10,12 @@ metaparams:
     batch_trans_instance_type: ml.c5.9xlarge
     batch_trans_instance_count: 1
 
+script_mode:
+    enabled: True
+    entry_point: single_model_entry.py
+    # entry_point: temporal_cv_model_entry.py
+    source_dir: ../src/script_modeling
+
 target:
     classification:
         threshold: 0.2  # if target > {threshold}, class = 1

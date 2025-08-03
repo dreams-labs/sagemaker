@@ -96,7 +96,7 @@ def train_single_period_script_model(
         raise ValueError(f"'eval' data URI missing for date_suffix {date_suffix}")
 
     # Read script_mode configuration
-    script_cfg = wallets_config.get('script_mode', {})
+    script_cfg = modeling_config.get('script_mode', {})
     entry_point = script_cfg['entry_point']
     source_dir = script_cfg['source_dir']
 
@@ -167,7 +167,7 @@ def train_temporal_cv_script_model(
       }
     """
     # Read script_mode configuration
-    script_cfg = wallets_config.get('script_mode', {})
+    script_cfg = modeling_config.get('script_mode', {})
     entry_point = script_cfg['entry_point']
     source_dir = script_cfg['source_dir']
 
