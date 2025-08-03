@@ -164,28 +164,23 @@ class WalletWorkflowOrchestrator:
         """
         Preprocess training data for all loaded date suffixes independently.
 
-        Each date suffix gets its own preprocessing run to maintain temporal
-        boundaries and avoid data leakage between modeling periods.
-
-        Returns:
-        - dict: Preprocessed data keyed by date suffix
-        {
-            "250301": {train, test, eval, val, metadata},
-            "250401": {train, test, eval, val, metadata}
-        }
-
-        Raises:
-        - ValueError: If training_data not loaded or preprocessor unavailable
+        If concatenate_offsets is enabled, filters each date_suffix to prevent
+        temporal overlap during downstream concatenation.
         """
         if not self.training_data:
             raise ValueError("No training data loaded. Call load_all_training_data() first.")
 
         preprocessed_by_date = {}
+        concatenate_mode = self.wallets_config['training_data'].get('concatenate_offsets', False)
 
         logger.info(f"Preprocessing {len(self.training_data)} date periods...")
 
         for date_suffix, date_data in self.training_data.items():
             logger.debug(f"Preprocessing data for {date_suffix}...")
+
+            # Apply temporal filtering if concatenation mode enabled
+            if concatenate_mode:
+                date_data = self._filter_temporal_overlap(date_data, date_suffix)
 
             # Initialize preprocessor for this date
             preprocessor = SageWalletsPreprocessor(self.wallets_config, self.modeling_config)
@@ -204,19 +199,21 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"  {date_suffix}: {total_rows:,} preprocessed rows")
 
         logger.info(f"Preprocessing complete for all {len(preprocessed_by_date)} dates.")
+        return preprocessed_by_date
 
 
     def concatenate_all_preprocessed_data(self) -> None:
         """
         Concatenate preprocessed CSVs across configured offsets for each split and
         save combined CSVs to the concatenated output directory.
-        Params:
-        - split_names (List[str]): List of splits to concatenate (e.g., ['train', 'eval', 'test']).
+
+        Applies fresh preprocessing with temporal filtering to prevent data overlap
+        when concatenate_offsets is enabled.
         """
         logger.info("Beginning concatenation of preprocessed data...")
 
-        # Load all preprocessed splits into memory
-        data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
+        # Preprocess all data from scratch to ensure temporal filtering is applied
+        data_by_date = self.preprocess_all_training_data()
 
         # Determine offsets for each split from config
         offsets_map = {
@@ -228,8 +225,8 @@ class WalletWorkflowOrchestrator:
         # Build concatenation output directory alongside the preprocessed tree
         # (mirrors preprocessed path but under "wallet_training_data_concatenated")
         base_dir = Path(self.wallets_config['training_data']['local_s3_root']) \
-                   / "s3_uploads" \
-                   / "wallet_training_data_concatenated"
+                / "s3_uploads" \
+                / "wallet_training_data_concatenated"
         local_dir = self.wallets_config["training_data"]["local_directory"]
         if self.dataset == 'dev':
             local_dir = f"{local_dir}_dev"
@@ -244,7 +241,9 @@ class WalletWorkflowOrchestrator:
             dfs = []
             for offset in offsets:
                 # Each offset is sampled only once for the configured split, to avoid duplication.
-                # Load the configured split CSV for this offset
+                # Load the configured split from fresh preprocessing
+                if offset not in data_by_date:
+                    raise KeyError(f"No data found for offset {offset}")
                 if split not in data_by_date[offset]:
                     raise KeyError(f"No '{split}' split found for offset {offset}")
                 df = data_by_date[offset][split]
@@ -829,6 +828,46 @@ class WalletWorkflowOrchestrator:
             dataset=dataset,
             overwrite_existing=overwrite_existing
         )
+
+
+    def _filter_temporal_overlap(self, date_data: dict, date_suffix: str) -> dict:
+        """
+        Filter each DataFrame to its max epoch_start_date to prevent temporal overlap.
+
+        Params:
+        - date_data (dict): Raw training data with keys like 'x_train', 'y_train', etc.
+        - date_suffix (str): Date suffix for logging
+
+        Returns:
+        - dict: Filtered training data with same structure
+        """
+        filtered_data = {}
+        total_rows_removed = 0
+        original_rows = 0
+
+        for key, df in date_data.items():
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                filtered_data[key] = df
+                continue
+
+            # Get max date for this DataFrame and filter to only that date
+            max_date = df.index.get_level_values('epoch_start_date').max()
+            mask = df.index.get_level_values('epoch_start_date') == max_date
+            filtered_data[key] = df[mask]
+
+            # Track filtering stats
+            rows_removed = len(df) - len(filtered_data[key])
+            total_rows_removed += rows_removed
+            original_rows += len(df)
+
+        # Log filtering results
+        if total_rows_removed > 0:
+            logger.info(f"Temporal filtering for {date_suffix}: removed {total_rows_removed:,} rows "
+                        f"({total_rows_removed/original_rows*100:.1f}%) to prevent overlap")
+        else:
+            logger.debug(f"Temporal filtering for {date_suffix}: no rows removed")
+
+        return filtered_data
 
 
     def _load_preprocessed_training_data(self, date_suffixes: list) -> dict:
