@@ -100,13 +100,14 @@ class SageWalletsPreprocessor:
                     split_name
                 )
 
-            # Preprocess X data
+            # Preprocess X and y data
             x_preprocessed = self._preprocess_x_data(training_data[x_split], x_split)
+            y_preprocessed = self.preprocess_y_data(training_data[y_split], y_split)
+            processed_data[f"{split_name}_y"] = y_preprocessed
 
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
                 # Train and Eval sets need the target var appended as first column
-                y_preprocessed = self.preprocess_y_data(training_data[y_split], y_split)
                 combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
                 processed_data[split_name] = combined_data
             else:
@@ -115,6 +116,9 @@ class SageWalletsPreprocessor:
 
             # Save preprocessed split to local file
             self._save_preprocessed_df(processed_data[split_name], split_name)
+
+            # Save preprocessed y data to local file
+            self._save_preprocessed_df(processed_data[f"{split_name}_y"], f"{split_name}_y")
 
             logger.info(f"Preprocessed {split_name}: {processed_data[split_name].shape[0]:,} rows "
                         f"× {processed_data[split_name].shape[1]} cols.")
