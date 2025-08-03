@@ -9,34 +9,6 @@ training_data: #SageMaker
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
 
-    # train_offsets: [
-    #     # '230908',
-    #     # '231008',
-    #     # '231107',
-    #     # '231207',
-    #     # '240106',
-    #     # '240205',
-    #     # '240306',
-    #     # '240405',
-    #     # '240505',
-    #     # '240604',
-    #     # '240704',
-    #     # '240803',
-    #     # '240902',
-    #     # '241002',
-    #     '241101',
-    #     '241231',
-    # ]
-    # eval_offsets: [
-    #     '241201',
-    #     '250130',
-
-    # ]
-    # test_offsets: [
-    #     '250301',
-    # ]
-
-
     train_offsets: [
         '220913',
         '221013',

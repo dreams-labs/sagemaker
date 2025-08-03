@@ -34,5 +34,16 @@ training:
         scale_pos_weight: 100
         early_stopping_rounds: 15
 
+    hpo:  # Hyperparameter Optimization
+        enabled: True
+        objective_metric_name: eval:cv_auc_pr
+        objective_type: maximize
+        hyperparameter_ranges:
+            max_depth: "IntegerParameter(3,10)"
+            eta: "ContinuousParameter(0.01,0.3)"
+            subsample: "ContinuousParameter(0.5,1.0)"
+        max_jobs: 20
+        max_parallel_jobs: 4
+        
 predicting:
     y_pred_threshold: 0.8 # predictions above this are positive

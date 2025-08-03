@@ -94,6 +94,7 @@ class TrainingConfig(NoExtrasBaseModel):
     )
     eval_metric: str = Field(...)
     hyperparameters: dict = Field(...)
+    hpo: dict = Field(...)
 
 
 # [Predicting]
