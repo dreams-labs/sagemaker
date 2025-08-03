@@ -209,6 +209,10 @@ class WalletWorkflowOrchestrator:
 
         Applies fresh preprocessing with temporal filtering to prevent data overlap
         when concatenate_offsets is enabled.
+
+        Exports separate y-files for test and val splits as debugging aids, since
+        their main CSV files contain X-only data (unlike train/eval which have
+        target data embedded as first column).
         """
         logger.info("Beginning concatenation of preprocessed data...")
 
@@ -220,6 +224,7 @@ class WalletWorkflowOrchestrator:
             'train': self.wallets_config['training_data'].get('train_offsets', []),
             'eval':  self.wallets_config['training_data'].get('eval_offsets', []),
             'test':  self.wallets_config['training_data'].get('test_offsets', []),
+            'val':   self.wallets_config['training_data'].get('val_offsets', []),
         }
 
         # Build concatenation output directory alongside the preprocessed tree
@@ -233,6 +238,7 @@ class WalletWorkflowOrchestrator:
         concat_base = base_dir / local_dir
         concat_base.mkdir(parents=True, exist_ok=True)
 
+        # Concatenate main splits
         for split, offsets in offsets_map.items():
             if not offsets:
                 logger.warning(f"No offsets configured for split '{split}'")
@@ -257,6 +263,34 @@ class WalletWorkflowOrchestrator:
             out_file = concat_base / f"{split}.csv"
             concatenated.to_csv(out_file, index=False, header=False)
             logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
+
+        # Concatenate y-files for test and val splits only
+        y_splits_to_export = ['test', 'val']
+        for split in y_splits_to_export:
+            split_offsets = offsets_map.get(split, [])
+            if not split_offsets:
+                logger.warning(f"No offsets configured for y-file export of '{split}'")
+                continue
+
+            y_dfs = []
+            y_split_key = f"{split}_y"
+
+            for offset in split_offsets:
+                if offset not in data_by_date:
+                    raise KeyError(f"No data found for offset {offset}")
+                if y_split_key not in data_by_date[offset]:
+                    raise KeyError(f"No '{y_split_key}' split found for offset {offset}")
+                y_df = data_by_date[offset][y_split_key]
+                y_dfs.append(y_df)
+
+            if not y_dfs:
+                logger.warning(f"No y-data found for split '{split}' across offsets {split_offsets}")
+                continue
+
+            concatenated_y = pd.concat(y_dfs, ignore_index=True)
+            y_out_file = concat_base / f"{split}_y.csv"
+            concatenated_y.to_csv(y_out_file, index=False, header=False)
+            logger.info(f"Saved concatenated {split}_y.csv with {len(concatenated_y)} rows to {y_out_file}")
 
 
     @u.timing_decorator
