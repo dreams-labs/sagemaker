@@ -66,7 +66,9 @@ def main() -> None:
     # Define custom PR-AUC evaluation metric
     def pr_auc_eval(preds, dtrain):
         labels = dtrain.get_label()
-        return 'pr_auc', average_precision_score(labels, preds)
+        score = average_precision_score(labels, preds)
+        print(f"validation:aucpr={score}")
+        return 'eval_aucpr', score
 
     # Train with early stopping and per-round PR-AUC logging
     booster = xgb.train(
@@ -86,7 +88,7 @@ def main() -> None:
     pr_auc = average_precision_score(y_val_actuals, y_val_predictions)
 
     # Emit metric for SageMaker’s regex parser.
-    print(f"eval:cv_auc_pr={pr_auc:.6f}")
+    print(f"validation:aucpr={pr_auc:.6f}")
 
     # Persist model artifacts to relative paths within the container
     model_output_dir = Path(os.environ.get("SM_MODEL_DIR", "/opt/ml/model"))

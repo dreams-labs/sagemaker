@@ -38,8 +38,6 @@ def load_hyperparams() -> argparse.Namespace:
                         help="Rounds for early stopping on validation set")
     parser.add_argument("--scale_pos_weight", type=float, default=0.9,
                         help="Rounds for early stopping on validation set")
-    parser.add_argument("--score_threshold", type=float, default=0.80,
-                        help="Placeholder threshold for business logic filtering")
     return parser.parse_args()
 
 
@@ -84,6 +82,7 @@ def build_booster_params(args: argparse.Namespace) -> dict:
         "max_depth": args.max_depth,
         "subsample": args.subsample,
         "colsample_bytree": args.colsample_bytree,
+        "scale_pos_weight": args.scale_pos_weight,
         "seed": 42,
     }
 

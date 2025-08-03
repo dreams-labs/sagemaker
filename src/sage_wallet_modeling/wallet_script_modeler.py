@@ -198,10 +198,18 @@ def _launch_hyperparameter_optimization(
     )
 
     # Configure HPO tuner
+    metric_definitions = [
+        {
+            'Name': 'validation:aucpr',  # Use colon for HPO
+            'Regex': r'eval_aucpr:([0-9\.]+)'  # Extract from your print statement
+        }
+    ]
+
     tuner = HyperparameterTuner(
         estimator=base_estimator,
         objective_metric_name=objective_metric_name,
         objective_type='Maximize',  # We want to maximize PR-AUC
+        metric_definitions=metric_definitions,
         hyperparameter_ranges=hyperparameter_ranges,
         max_jobs=max_jobs,
         max_parallel_jobs=max_parallel_jobs
@@ -323,7 +331,6 @@ def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, 
         'colsample_bytree',
         'early_stopping_rounds',
         'scale_pos_weight',
-        'score_threshold'
     }
     for key in allowed - {'num_boost_round'}:
         if key in raw_hp:
