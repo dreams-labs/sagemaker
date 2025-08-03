@@ -73,7 +73,7 @@ class WalletWorkflowOrchestrator:
 
     def load_all_training_data(
         self,
-        date_suffixes: list
+        date_suffixes: list = None
         ):
         """
         Load training data for multiple prediction period dates, maintaining separate
@@ -84,7 +84,8 @@ class WalletWorkflowOrchestrator:
         splits that should be processed independently.
 
         Params:
-        - date_suffixes (list): List of date suffixes (e.g., ["250301", "250401"])
+        - date_suffixes (list, optional): List of date suffixes (e.g., ["250301", "250401"])
+                                        If None, auto-detects from config offset settings
 
         Returns:
         - Sets self.training_data to nested dict structure:
@@ -103,6 +104,19 @@ class WalletWorkflowOrchestrator:
         Note: Each date suffix maintains independent data splits. Offset records have
         already been merged upstream, so no concatenation occurs at this stage.
         """
+        # Auto-detect date_suffixes from config if not provided
+        if date_suffixes is None:
+            train_offsets = self.wallets_config['training_data'].get('train_offsets', [])
+            eval_offsets = self.wallets_config['training_data'].get('eval_offsets', [])
+            test_offsets = self.wallets_config['training_data'].get('test_offsets', [])
+            val_offsets = self.wallets_config['training_data'].get('val_offsets', [])
+
+            # Combine all offsets and remove duplicates while preserving order
+            all_offsets = train_offsets + eval_offsets + test_offsets + val_offsets
+            date_suffixes = list(dict.fromkeys(all_offsets))  # Removes duplicates, preserves order
+
+            logger.info(f"Auto-detected date_suffixes from config: {date_suffixes}")
+
         # Data location validation with dataset suffix
         load_folder = self.wallets_config['training_data']['training_data_directory']
 
@@ -113,7 +127,8 @@ class WalletWorkflowOrchestrator:
         self._validate_data_folder()
 
         if not date_suffixes:
-            raise ValueError("date_suffixes cannot be empty")
+            raise ValueError("date_suffixes cannot be empty. Either provide explicit list or "
+                            "configure train_offsets/eval_offsets/test_offsets/val_offsets in config.")
 
         # Store date suffixes for upload method
         self.date_suffixes = date_suffixes
@@ -135,7 +150,7 @@ class WalletWorkflowOrchestrator:
             for df in date_data.values()
         )
         offsets_per_df = len(self.training_data[date_suffixes[0]]
-                             ['x_train'].index.get_level_values('epoch_start_date').unique())
+                            ['x_train'].index.get_level_values('epoch_start_date').unique())
         logger.info(f"Training data loaded successfully: {total_rows:,} total rows "
                     f"and {offsets_per_df} offsets for each date_suffix.")
 
