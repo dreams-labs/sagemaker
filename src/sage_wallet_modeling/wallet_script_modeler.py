@@ -27,7 +27,15 @@ def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, 
         hp['num_boost_round'] = raw_hp['num_boost_round']
 
     # allowed flags
-    allowed = {'num_boost_round', 'eta', 'max_depth', 'subsample', 'early_stopping_rounds', 'score_threshold'}
+    allowed = {
+        'num_boost_round',
+        'eta',
+        'max_depth',
+        'subsample',
+        'colsample_bytree',
+        'early_stopping_rounds',
+        'score_threshold'
+    }
     for key in allowed - {'num_boost_round'}:
         if key in raw_hp:
             hp[key] = raw_hp[key]

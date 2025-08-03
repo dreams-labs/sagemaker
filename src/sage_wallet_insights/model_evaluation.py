@@ -1,4 +1,5 @@
 import sys
+import logging
 from pathlib import Path
 from typing import Tuple,Union
 import pandas as pd
@@ -11,6 +12,8 @@ from utils import ConfigError
 
 
 # pylint:disable=invalid-name  # X isn't lowercase
+# Set up logger at the module level
+logger = logging.getLogger(__name__)
 
 
 # --------------------------
@@ -117,8 +120,8 @@ def create_sagemaker_evaluator(
         # Validation data
         'X_validation': X_val,
         'y_validation': y_val.iloc[:, 0],
-        'y_validation_pred': y_val_pred,
-        'validation_target_vars_df': y_val,
+        'y_val_pred': y_val_pred,
+        'y_val': y_val,
 
         # Mock pipeline
         'pipeline': create_mock_pipeline(model_type)
@@ -126,7 +129,7 @@ def create_sagemaker_evaluator(
 
     if model_type == 'classification':
         wallet_model_results['y_pred_proba'] = y_pred_proba
-        wallet_model_results['y_validation_pred_proba'] = y_val_pred_proba
+        wallet_model_results['y_val_pred_proba'] = y_val_pred_proba
 
     # 5. Create and return evaluator
     # ------------------------------
@@ -143,125 +146,134 @@ def create_sagemaker_evaluator(
 def create_concatenated_sagemaker_evaluator(
     wallets_config: dict,
     modeling_config: dict,
-    y_test_pred: pd.Series
+    y_test_pred: pd.Series,
+    y_test: pd.DataFrame,
+    y_val_pred: pd.Series = None,
+    y_val: pd.DataFrame = None
 ) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
     """
-    Create a SageMaker evaluator for concatenated model results (test-only evaluation).
-
-    Simplified version of create_sagemaker_evaluator() that handles:
-    - Concatenated training data structure (no date suffixes)
-    - Test-only evaluation (no validation set required)
-    - Different file loading patterns
+    Create a SageMaker evaluator for concatenated model results with optional validation set.
 
     Params:
     - wallets_config (dict): Configuration for training data paths
     - modeling_config (dict): Configuration for model parameters
-    - y_test_pred (pd.Series): Predicted values for the concatenated test set
+    - y_test_pred (Series): Predicted values for the concatenated test set
+    - y_test (DataFrame): Single-column actual target for the concatenated test set
+    - y_val_pred (Series, optional): Predicted values for validation set
+    - y_val (DataFrame, optional): Single-column actual target for the validation set
 
     Returns:
-    - RegressorEvaluator or ClassifierEvaluator: Configured evaluator ready for analysis
+    - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
     """
-    # 1. Load concatenated training data
-    # ----------------------------------
-    model_type = modeling_config['training']['model_type']
+    # Validate test target
+    if not isinstance(y_test, pd.DataFrame) or y_test.shape[1] != 1:
+        raise ValueError("Expected y_test to be a single-column DataFrame")
+    target_var = y_test.columns[0]
+    y_test_series = y_test.iloc[:, 0].rename(target_var)
+    y_test_pred.index = y_test_series.index
 
-    # For concatenated data, load from the concatenated CSV structure
-    base_dir = Path(f"{wallets_config['training_data']['local_s3_root']}")
+    # Validate optional validation target
+    validation_provided = y_val is not None and y_val_pred is not None
+    if validation_provided:
+        if not isinstance(y_val, pd.DataFrame) or y_val.shape[1] != 1:
+            raise ValueError("Expected y_val to be a single-column DataFrame")
+        y_val_series = y_val.iloc[:, 0].rename(target_var)
+        y_val_pred.index = y_val_series.index
+
+    # Load concatenated training and test features
+    base_dir = Path(wallets_config["training_data"]["local_s3_root"])
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
     local_dir = wallets_config["training_data"]["local_directory"]
-    dataset = wallets_config['training_data'].get('dataset', 'dev')
-    if dataset == 'dev':
+    if wallets_config["training_data"].get("dataset", "dev") == "dev":
         local_dir = f"{local_dir}_dev"
-
     data_path = concat_dir / local_dir
 
-    # Load concatenated CSVs (these have target as first column, no headers)
     train_df = pd.read_csv(data_path / "train.csv", header=None)
     test_df = pd.read_csv(data_path / "test.csv", header=None)
 
-    # Split into X and y (target is first column)
     y_train = train_df.iloc[:, 0]
     X_train = train_df.iloc[:, 1:]
-    y_test = test_df.iloc[:, 0]
-    X_test = test_df.iloc[:, 1:]
+    X_test = test_df
 
-    # Convert column names to strings to avoid iteration errors in evaluator
-    X_train.columns = [f'feature_{i}' for i in range(len(X_train.columns))]
-    X_test.columns = [f'feature_{i}' for i in range(len(X_test.columns))]
+    # Ensure feature count matches
+    expected_n = X_train.shape[1]
+    if X_test.shape[1] != expected_n:
+        raise ValueError(
+            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
+        )
 
-    # Assign proper index to predictions
-    y_test_pred = assign_index_to_pred(y_test_pred, pd.DataFrame(y_test))
+    # Rename feature columns to avoid numeric-only names
+    X_train.columns = [f"feature_{i}" for i in range(expected_n)]
+    X_test.columns = [f"feature_{i}" for i in range(expected_n)]
 
-    # 2. Prepare wime modeling config
-    # -------------------------------
+    # Prepare validation placeholders
+    X_validation = None
+    y_validation = None
+    if validation_provided:
+        X_validation = None
+        y_validation = y_val_series
+
+    # Build modeling config for evaluator
     wime_modeling_config = {
-        'target_variable': 'target',  # Generic name for concatenated data
-        'model_type': model_type,
-        'returns_winsorization': 0.005,
-        'training_data': {
-            'modeling_period_duration': 30
-        },
-        'sagemaker_metadata': {
-            'local_directory': local_dir,
-            'date_suffix': 'concat'
+        "target_variable": target_var,
+        "model_type": modeling_config["training"]["model_type"],
+        "returns_winsorization": 0.005,
+        "training_data": {"modeling_period_duration": 30},
+        "sagemaker_metadata": {
+            "local_directory": local_dir,
+            "date_suffix": "concat"
         }
     }
 
-    # 3. Handle classification
-    # ------------------------
-    if model_type == 'classification':
-        y_pred_thresh = modeling_config['predicting']['y_pred_threshold']
-        wime_modeling_config['y_pred_threshold'] = y_pred_thresh
+    model_type = modeling_config["training"]["model_type"]
+    # Initialize prediction containers
+    y_pred = y_test_pred.copy()
+    y_pred_proba = None
+    y_val_pred_binary = None
+    y_val_pred_proba = None
 
-        # Store probabilities before thresholding
+    if model_type == "classification":
+        threshold = modeling_config["predicting"]["y_pred_threshold"]
+        wime_modeling_config["y_pred_threshold"] = threshold
+        # Store raw probabilities then binarize
         y_pred_proba = y_test_pred.copy()
+        y_pred = (y_test_pred > threshold).astype(int)
+        if validation_provided:
+            y_val_pred_proba = y_val_pred.copy()
+            y_val_pred_binary = (y_val_pred > threshold).astype(int)
 
-        # Apply threshold to get binary predictions
-        y_test_pred = (y_test_pred > y_pred_thresh).astype(int)
-
-    # 4. Prepare model results (test-only version)
-    # --------------------------------------------
     model_id = f"sagemaker_concat_{local_dir}"
 
     wallet_model_results = {
-        'model_id': model_id,
-        'modeling_config': wime_modeling_config,
-        'model_type': model_type,
-
-        # Training data
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
-        'y_pred': y_test_pred,
-        'training_cohort_pred': None,
-        'training_cohort_actuals': None,
-
-        # No validation data for concatenated model
-        'X_validation': None,
-        'y_validation': None,
-        'y_validation_pred': None,
-        'validation_target_vars_df': None,
-
-        # Mock pipeline
-        'pipeline': create_mock_pipeline(model_type)
+        "model_id": model_id,
+        "modeling_config": wime_modeling_config,
+        "model_type": model_type,
+        "X_train": X_train,
+        "y_train": y_train,
+        "X_test": X_test,
+        "y_test": y_test_series,
+        "y_pred": y_pred,
+        "training_cohort_pred": None,
+        "training_cohort_actuals": None,
+        "X_validation": X_validation,
+        "y_validation": y_validation,
+        "validation_target_vars_df": y_val,
+        # Remove "y_val" (raw DataFrame), use only "y_validation"
+        # Update key: "y_val_pred" -> "y_validation_pred"
+        "y_validation_pred": y_val_pred_binary if model_type == "classification" else (y_val_pred if validation_provided else None),
+        "pipeline": create_mock_pipeline(model_type)
     }
 
-    if model_type == 'classification':
-        wallet_model_results['y_pred_proba'] = y_pred_proba
-        wallet_model_results['y_validation_pred_proba'] = None
+    if model_type == "classification":
+        wallet_model_results["y_pred_proba"] = y_pred_proba
+        # Change key from "y_val_pred_proba" to "y_validation_pred_proba"
+        wallet_model_results["y_validation_pred_proba"] = y_val_pred_proba
 
-    # 5. Create and return evaluator
-    # ------------------------------
-    if model_type == 'regression':
-        wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
-    elif model_type == 'classification':
-        wallet_evaluator = wime.ClassifierEvaluator(wallet_model_results)
+    # Return the appropriate evaluator
+    if model_type == "regression":
+        return wime.RegressorEvaluator(wallet_model_results)
     else:
-        raise ConfigError(f"Unknown model type {model_type} found in config.")
-
-    return wallet_evaluator
-
+        return wime.ClassifierEvaluator(wallet_model_results)
 
 # --------------------------
 #      Helper Functions
@@ -342,7 +354,36 @@ def load_bt_sagemaker_predictions(
     return pred_series
 
 
+def load_concatenated_y(
+    data_type: str,
+    wallets_config: dict
+) -> pd.Series:
+    """
+    Load concatenated target variable series for concatenated datasets.
 
+    Params:
+    - data_type (str): Name of data set type, e.g., 'test' or 'val'.
+    - wallets_config (dict): Configuration for training data paths.
+
+    Returns:
+    - target_series (pd.Series): Series of target values loaded from CSV.
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
+    local_dir = wallets_config['training_data']['local_directory']
+    data_path = concat_dir / local_dir
+
+    # Load the target CSV: test_y.csv or val_y.csv depending on data_type
+    csv_path = data_path / f"{data_type}_y.csv"
+    target_df = pd.read_csv(csv_path,header=None)
+    target_series = pd.Series(target_df.iloc[:, 0].values)
+
+    # Check for NaN values
+    if target_series.isna().any():
+        nan_count = target_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} target data from {csv_path}")
+
+    return target_df
 
 
 # --------------------------

@@ -12,7 +12,7 @@ metaparams:
 
 target:
     classification:
-        threshold: 0.05  # if target > {threshold}, class = 1
+        threshold: 0.25  # if target > {threshold}, class = 1
 
 training:
     model_type: classification  # regression or classification
@@ -21,9 +21,9 @@ training:
     #KeyParam Hyperparameters
     hyperparameters:
         num_round: 500
-        max_depth: 6
+        max_depth: 4
         eta: 0.1
-        subsample: 1.0
+        subsample: 0.8
         colsample_bytree: 0.9
         early_stopping_rounds: 15
 

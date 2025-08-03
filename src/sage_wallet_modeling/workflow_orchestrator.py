@@ -323,21 +323,15 @@ class WalletWorkflowOrchestrator:
             local_dir = f"{local_dir}_dev"
         concat_dir = concat_root / local_dir
 
-        splits = ['train', 'eval', 'test']
+        splits = ['train', 'eval', 'test', 'val']
         logger.info("Beginning upload of concatenated training data...")
         for split in splits:
-            local_file = concat_dir / f"{split}.csv"
-            if not local_file.exists():
-                raise FileNotFoundError(f"Concatenated file not found: {local_file}")
-            # Read for validation
-            df = pd.read_csv(local_file, header=None)
-            # Optional CSV-safety check
-            self._validate_csv_safety(df, split)
 
-            # Build S3 key
+            # Check if file already exists in S3
             s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
             s3_uri = f"s3://{bucket}/{s3_key}"
 
+            # Escape if we're not overwriting
             if not overwrite_existing:
                 try:
                     s3_client.head_object(Bucket=bucket, Key=s3_key)
@@ -346,13 +340,15 @@ class WalletWorkflowOrchestrator:
                     continue
                 except ClientError:
                     pass
+            logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
 
-            # Upload
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
-                df.to_csv(tmp.name, index=False, header=False)
-                temp_path = tmp.name
-            s3_client.upload_file(temp_path, bucket, s3_key)
-            os.unlink(temp_path)
+            # Load local file
+            local_file = concat_dir / f"{split}.csv"
+            if not local_file.exists():
+                raise FileNotFoundError(f"Concatenated file not found: {local_file}")
+
+            # Upload directly
+            s3_client.upload_file(str(local_file), bucket, s3_key)
             logger.info(f"Uploaded concatenated split '{split}' to {s3_uri}")
             upload_results[split] = s3_uri
 
@@ -695,11 +691,19 @@ class WalletWorkflowOrchestrator:
 
 
     @u.timing_decorator
-    def train_concatenated_offsets_model(self, overwrite_existing: bool = False) -> dict:
+    def train_concatenated_offsets_model(
+            self,
+            upload_results: dict,
+            overwrite_existing: bool = False
+        ) -> dict:
         """
         Build a full-history model by concatenating all offsets, uploading the
         combined CSVs, and training one XGBoost job on train/eval from that set.
         Returns the training job metadata.
+
+        Params:
+        - upload_results (dict): URIs from upload_concatenated_training_data()
+            Format: {'train': s3://…/train.csv, 'eval': s3://…/eval.csv, 'test': …}
         """
         # Initialize date_suffixes for concatenation based on config offsets
         train_offsets = self.wallets_config['training_data'].get('train_offsets', [])
@@ -707,13 +711,6 @@ class WalletWorkflowOrchestrator:
         test_offsets  = self.wallets_config['training_data'].get('test_offsets', [])
         # Use all offsets that have preprocessed CSVs available
         self.date_suffixes = list(dict.fromkeys(train_offsets + eval_offsets + test_offsets))
-
-        # 1) Concatenate locally
-        self.concatenate_all_preprocessed_data()
-
-        # 2) Push to S3
-        upload_results = self.upload_concatenated_training_data(overwrite_existing=overwrite_existing)
-        # upload_results: {'train': s3://…/train.csv, 'eval': s3://…/eval.csv, 'test': …}
 
         # 3) Prepare s3_uris dict keyed by our special suffix
         synthetic_suffix = 'concat'
@@ -724,7 +721,7 @@ class WalletWorkflowOrchestrator:
             }
         }
 
-        # 4) Launch training via WalletModeler
+        # Launch training via WalletModeler
         modeler = WalletModeler(
             wallets_config   = self.wallets_config,
             modeling_config = self.modeling_config,
@@ -1076,23 +1073,6 @@ class WalletWorkflowOrchestrator:
                 )
 
 
-    def _validate_csv_safety(self, df: pd.DataFrame, split_name: str):
-        """
-        Check for CSV-unsafe characters in DataFrame before upload.
-
-        Params:
-        - df (DataFrame): DataFrame to validate
-        - split_name (str): Name of the data split for error reporting
-        """
-        string_cols = df.select_dtypes(include=['object']).columns
-
-        for col in string_cols:
-            if df[col].astype(str).str.contains('[,"\n\r]', na=False).any():
-                problematic_values = df[col][df[col].astype(str).str.contains('[,"\n\r]', na=False)]
-                raise ValueError(
-                    f"CSV-unsafe characters found in {split_name}.{col}: {problematic_values.iloc[0]}"
-                )
-
 
     def _get_s3_upload_paths(self) -> tuple[str, str, str]:
         """
@@ -1189,11 +1169,12 @@ class WalletWorkflowOrchestrator:
                 except ClientError:
                     pass  # Doesn't exist yet
 
-            self._validate_csv_safety(df, split_name)
+            # Store df to temp CSV
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
                 df.to_csv(tmp.name, index=False, header=False)
                 temp_path = tmp.name
 
+            # Upload temp CSV
             s3_client.upload_file(temp_path, context.bucket_name, s3_key)
             os.unlink(temp_path)
             logger.info(f"Uploaded {split_name} to {s3_uri}")
