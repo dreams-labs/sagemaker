@@ -128,12 +128,13 @@ class WalletModeler:
         """
         # If script-mode is enabled in config, delegate to the script-mode launcher
         if self.modeling_config.get('script_mode', {}).get('enabled', False):
-            return sm.train_single_period_script_model(
+            return sm.initiate_script_modeling(
                 wallets_config=self.wallets_config,
                 modeling_config=self.modeling_config,
                 date_suffix=self.date_suffix,
                 s3_uris=self.s3_uris,
             )
+
 
         logger.info("Starting SageMaker training sequence...")
 
