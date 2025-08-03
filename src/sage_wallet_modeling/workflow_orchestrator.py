@@ -639,6 +639,22 @@ class WalletWorkflowOrchestrator:
         return f"s3://{bucket}/{cv_prefix}"
 
 
+    def get_hpo_results(self, date_suffix: str = None) -> dict:
+        """Get HPO results for a specific date_suffix."""
+        if not date_suffix:
+            date_suffix = self.date_suffixes[0] if self.date_suffixes else None
+            if not date_suffix:
+                raise ValueError("No date_suffix provided and none available")
+
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix
+        )
+
+        return modeler.load_hpo_results()
+
+
     @u.timing_decorator
     def predict_with_all_models(
             self,

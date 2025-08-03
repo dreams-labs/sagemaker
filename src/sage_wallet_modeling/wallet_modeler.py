@@ -277,6 +277,68 @@ class WalletModeler:
         }
 
 
+    def load_hpo_results(self, hpo_job_name: str = None) -> dict:
+        """
+        Load results from a completed HPO job.
+
+        Params:
+        - hpo_job_name (str, optional): Specific job name, or auto-detect most recent
+
+        Returns:
+        - dict: HPO results including best hyperparameters and training job details
+        """
+        if not hpo_job_name:
+            hpo_job_name = self._find_most_recent_hpo_job()
+
+        sagemaker_client = self.sagemaker_session.sagemaker_client
+
+        # Get HPO job details
+        hpo_response = sagemaker_client.describe_hyper_parameter_tuning_job(
+            HyperParameterTuningJobName=hpo_job_name
+        )
+
+        # Get best training job
+        best_job_name = hpo_response['BestTrainingJob']['TrainingJobName']
+        best_metrics = hpo_response['BestTrainingJob']['FinalHyperParameterTuningJobObjectiveMetric']
+
+        # Get best job's hyperparameters
+        training_response = sagemaker_client.describe_training_job(
+            TrainingJobName=best_job_name
+        )
+
+        best_hyperparams = training_response['HyperParameters']
+        model_uri = training_response['ModelArtifacts']['S3ModelArtifacts']
+
+        return {
+            'hpo_job_name': hpo_job_name,
+            'best_training_job_name': best_job_name,
+            'best_objective_value': best_metrics['Value'],
+            'best_hyperparameters': best_hyperparams,
+            'model_uri': model_uri,
+            'hpo_status': hpo_response['HyperParameterTuningJobStatus'],
+            'total_training_jobs': hpo_response['TrainingJobStatusCounters']['Completed']
+        }
+
+    def _find_most_recent_hpo_job(self) -> str:
+        """Find the most recent HPO job for this upload_directory and date_suffix."""
+        sagemaker_client = self.sagemaker_session.sagemaker_client
+
+        # List HPO jobs with our naming pattern
+        job_prefix = f"whpo-{self.upload_directory[:8]}"
+
+        response = sagemaker_client.list_hyper_parameter_tuning_jobs(
+            NameContains=job_prefix,
+            SortBy='CreationTime',
+            SortOrder='Descending',
+            MaxResults=1
+        )
+
+        if not response['HyperParameterTuningJobSummaries']:
+            raise FileNotFoundError(f"No HPO jobs found with prefix: {job_prefix}")
+
+        return response['HyperParameterTuningJobSummaries'][0]['HyperParameterTuningJobName']
+
+
     def predict_with_batch_transform(
             self,
             dataset_type: str = 'val',
