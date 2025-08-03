@@ -342,7 +342,36 @@ def load_bt_sagemaker_predictions(
     return pred_series
 
 
+def load_concatenated_y(
+    data_type: str,
+    wallets_config: dict
+) -> pd.Series:
+    """
+    Load concatenated target variable series for concatenated datasets.
 
+    Params:
+    - data_type (str): Name of data set type, e.g., 'test' or 'val'.
+    - wallets_config (dict): Configuration for training data paths.
+
+    Returns:
+    - target_series (pd.Series): Series of target values loaded from CSV.
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
+    local_dir = wallets_config['training_data']['local_directory']
+    data_path = concat_dir / local_dir
+
+    # Load the target CSV: test_y.csv or val_y.csv depending on data_type
+    csv_path = data_path / f"{data_type}_y.csv"
+    target_df = pd.read_csv(csv_path)
+    target_series = pd.Series(target_df.iloc[:, 0].values)
+
+    # Check for NaN values
+    if target_series.isna().any():
+        nan_count = target_series.isna().sum()
+        raise ValueError(f"Found {nan_count} NaN values in {data_type} target data from {csv_path}")
+
+    return target_series
 
 
 # --------------------------
