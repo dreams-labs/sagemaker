@@ -34,6 +34,7 @@ def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, 
         'subsample',
         'colsample_bytree',
         'early_stopping_rounds',
+        'scale_pos_weight',
         'score_threshold'
     }
     for key in allowed - {'num_boost_round'}:
