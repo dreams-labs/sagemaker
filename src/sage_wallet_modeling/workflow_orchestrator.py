@@ -331,16 +331,21 @@ class WalletWorkflowOrchestrator:
             s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
             s3_uri = f"s3://{bucket}/{s3_key}"
 
-            # Escape if we're not overwriting
-            if not overwrite_existing:
-                try:
-                    s3_client.head_object(Bucket=bucket, Key=s3_key)
+            # Check if file exists
+            try:
+                s3_client.head_object(Bucket=bucket, Key=s3_key)
+
+                # Escape if we're not overwriting
+                if not overwrite_existing:
                     logger.info(f"File exists, skipping upload of concatenated split '{split}': {s3_key}")
                     upload_results[split] = s3_uri
                     continue
-                except ClientError:
-                    pass
-            logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
+                else:
+                    logger.info(f"Overwriting existing file '{s3_uri}'...")
+            # Error emitted if the file can't be found
+            except ClientError:
+                logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
+                pass
 
             # Load local file
             local_file = concat_dir / f"{split}.csv"
