@@ -9,34 +9,6 @@ training_data: #SageMaker
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
 
-    # train_offsets: [
-    #     # '230908',
-    #     # '231008',
-    #     # '231107',
-    #     # '231207',
-    #     # '240106',
-    #     # '240205',
-    #     # '240306',
-    #     # '240405',
-    #     # '240505',
-    #     # '240604',
-    #     # '240704',
-    #     # '240803',
-    #     # '240902',
-    #     # '241002',
-    #     '241101',
-    #     '241231',
-    # ]
-    # eval_offsets: [
-    #     '241201',
-    #     '250130',
-
-    # ]
-    # test_offsets: [
-    #     '250301',
-    # ]
-
-
     train_offsets: [
         '220913',
         '221013',
@@ -63,81 +35,31 @@ training_data: #SageMaker
         '240704',
         '240803',
         '240902',
-        '241002',
-        '241201',
-        '241101',
-        '241231',
-        '250130',
-        '250301',
+        # '241002',
+        # '241201',
+        # '241101',
+        # '241231',
+        # '250130',
+        # '250301',
     ]
     eval_offsets: [
-        '220913',
-        '221013',
-        '221112',
-        '221212',
-        '230111',
-        '230210',
-        '230312',
-        '230411',
-        '230511',
-        '230610',
-        '230710',
-        '230809',
-        '230908',
-        '231008',
-        '231107',
-        '231207',
-        '240106',
-        '240205',
-        '240306',
-        '240405',
-        '240505',
-        '240604',
-        '240704',
-        '240803',
-        '240902',
         '241002',
-        '241201',
         '241101',
+        '241201',
         '241231',
         '250130',
         '250301',
     ]
     test_offsets: [
-        '220913',
-        '221013',
-        '221112',
-        '221212',
-        '230111',
-        '230210',
-        '230312',
-        '230411',
-        '230511',
-        '230610',
-        '230710',
-        '230809',
-        '230908',
-        '231008',
-        '231107',
-        '231207',
-        '240106',
-        '240205',
-        '240306',
-        '240405',
-        '240505',
-        '240604',
-        '240704',
-        '240803',
-        '240902',
         '241002',
-        '241201',
         '241101',
+        '241201',
         '241231',
         '250130',
         '250301',
     ]
-    val_offsets: [
-        '250301',  # the val set from this is after the train/test/eval
+    val_offsets: [  # val data is 1 month later than these modeling_period_start dates
+        '250301',
         '250331',
         '250430',
         '250530',
@@ -164,12 +86,6 @@ aws: #SageMaker
     concatenated_directory: training-data-concatenated
     temporal_cv_directory: training-data-temporal-cvs
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
-
-script_mode: #SageMaker
-    enabled: True
-    entry_point: single_model_entry.py
-    # entry_point: temporal_cv_model_entry.py
-    source_dir: ../src/script_modeling
 
 n_threads: #SageMaker
     upload_all_training_data: 4 # how many uploads to perform concurrently

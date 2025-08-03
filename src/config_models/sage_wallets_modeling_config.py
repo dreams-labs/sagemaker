@@ -21,6 +21,7 @@ class SageWalletsModelingConfig(NoExtrasBaseModel):
     """Top-level structure of the main sagemaker_modeling_config.yaml file."""
     framework: 'FrameworkConfig' = Field(...)
     metaparams: 'MetaparamsConfig' = Field(...)
+    script_mode: 'ScriptModeConfig' = Field(...)
     target: 'TargetConfig' = Field(...)
     training: 'TrainingConfig' = Field(...)
     predicting: 'PredictingConfig' = Field(...)
@@ -66,6 +67,17 @@ class MetaparamsConfig(BaseModel):
                               "Local folders should use underscores instead of hyphens.")
 
 
+# [Script_mode]
+# -------------
+class ScriptModeConfig(NoExtrasBaseModel):
+    """
+    Configuration for script-mode training settings.
+    """
+    enabled: bool = Field(..., description="Whether to enable script-mode training")
+    entry_point: str = Field(..., description="Script entry point for training")
+    source_dir: str = Field(..., description="Path to source directory for script-mode training")
+
+
 # [Training]
 # ----------
 class ModelType(str, Enum):
@@ -82,6 +94,7 @@ class TrainingConfig(NoExtrasBaseModel):
     )
     eval_metric: str = Field(...)
     hyperparameters: dict = Field(...)
+    hpo: dict = Field(...)
 
 
 # [Predicting]

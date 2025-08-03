@@ -127,13 +127,14 @@ class WalletModeler:
         - dict: Contains model URI and training job name
         """
         # If script-mode is enabled in config, delegate to the script-mode launcher
-        if self.wallets_config.get('script_mode', {}).get('enabled', False):
-            return sm.train_single_period_script_model(
+        if self.modeling_config.get('script_mode', {}).get('enabled', False):
+            return sm.initiate_script_modeling(
                 wallets_config=self.wallets_config,
                 modeling_config=self.modeling_config,
                 date_suffix=self.date_suffix,
                 s3_uris=self.s3_uris,
             )
+
 
         logger.info("Starting SageMaker training sequence...")
 
@@ -194,7 +195,7 @@ class WalletModeler:
         - dict: Contains model URI and training job name of most recent model
         """
         # Check if script-mode is enabled
-        script_mode_enabled = self.wallets_config.get('script_mode', {}).get('enabled', False)
+        script_mode_enabled = self.modeling_config.get('script_mode', {}).get('enabled', False)
 
         if script_mode_enabled:
             # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
