@@ -8,8 +8,11 @@ from typing import Dict, Union
 
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
+from sagemaker.sklearn import SKLearn
 from sagemaker.tuner import HyperparameterTuner
 from sagemaker.parameter import IntegerParameter, ContinuousParameter
+from sagemaker.exceptions import UnexpectedStatusException
+import boto3
 
 # Local module imports
 from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
@@ -188,14 +191,50 @@ def _launch_hyperparameter_optimization(
     # Define hyperparameter ranges from config
     hyperparameter_ranges = _get_hpo_parameter_ranges(modeling_config)
 
-    # Create base estimator without fixed hyperparameters
-    base_estimator = XGBoost(
+    # # Create base estimator without fixed hyperparameters
+    # base_estimator = XGBoost(
+    #     entry_point=script_cfg['entry_point'],
+    #     source_dir=script_cfg['source_dir'],
+    #     framework_version=modeling_config['framework']['version'],
+    #     instance_type=modeling_config['metaparams']['instance_type'],
+    #     instance_count=modeling_config['metaparams']['instance_count'],
+    #     role=wallets_config['aws']['modeler_arn'],
+    #     output_path=output_path
+    # )
+
+    # # Configure HPO tuner
+    # metric_definitions = [
+    #     {
+    #         'Name': 'validation:aucpr',  # Use colon for HPO
+    #         'Regex': r'eval_aucpr:([0-9\.]+)'  # Extract from your print statement
+    #     }
+    # ]
+
+    # tuner = HyperparameterTuner(
+    #     estimator=base_estimator,
+    #     objective_metric_name=objective_metric_name,
+    #     objective_type='Maximize',  # We want to maximize PR-AUC
+    #     metric_definitions=metric_definitions,
+    #     hyperparameter_ranges=hyperparameter_ranges,
+    #     max_jobs=max_jobs,
+    #     max_parallel_jobs=max_parallel_jobs
+    # )
+
+    # Convert the base param 'num_round' into the script-based 'num_boost_round'
+    hyperparams = modeling_config['training']['hyperparameters'].copy()
+    if 'num_round' in hyperparams:
+        hyperparams['num_boost_round'] = hyperparams.pop('num_round')
+
+    # Use a generic SKLearn container to allow tuning any hyperparameter
+    base_estimator = SKLearn(
         entry_point=script_cfg['entry_point'],
         source_dir=script_cfg['source_dir'],
-        framework_version=modeling_config['framework']['version'],
+        framework_version="1.2-1",
         instance_type=modeling_config['metaparams']['instance_type'],
         instance_count=modeling_config['metaparams']['instance_count'],
         role=wallets_config['aws']['modeler_arn'],
+        hyperparameters=hyperparams,
+        dependencies=[script_cfg['source_dir']],
         output_path=output_path
     )
 
@@ -210,12 +249,13 @@ def _launch_hyperparameter_optimization(
     tuner = HyperparameterTuner(
         estimator=base_estimator,
         objective_metric_name=objective_metric_name,
-        objective_type='Maximize',  # We want to maximize PR-AUC
+        objective_type='Maximize',
         metric_definitions=metric_definitions,
         hyperparameter_ranges=hyperparameter_ranges,
         max_jobs=max_jobs,
         max_parallel_jobs=max_parallel_jobs
     )
+
 
     # Build job name and prepare inputs
     job_name = _build_job_name("whpo", upload_dir, date_suffix)
@@ -229,11 +269,26 @@ def _launch_hyperparameter_optimization(
     ambient_player.start('ship_power_room_loop')
 
     # Launch HPO
-    tuner.fit(
-        {"train": train_input, "validation": validation_input},
-        job_name=job_name,
-        wait=True
-    )
+    try:
+        tuner.fit(
+            {"train": train_input, "validation": validation_input},
+            job_name=job_name,
+            wait=True
+        )
+    except UnexpectedStatusException as e:
+        logger.error("Hyperparameter tuning job %s failed: %s", job_name, str(e))
+        sm_client = boto3.client('sagemaker')
+        jobs = sm_client.list_training_jobs_for_hyper_parameter_tuning_job(
+            HyperParameterTuningJobName=job_name
+        )['TrainingJobSummaries']
+        for summary in jobs:
+            tj_name = summary['TrainingJobName']
+            status = summary['TrainingJobStatus']
+            if status != 'Completed':
+                desc = sm_client.describe_training_job(TrainingJobName=tj_name)
+                failure = desc.get('FailureReason', 'Unknown')
+                logger.error(" Training job %s status %s, failure reason: %s", tj_name, status, failure)
+        raise
 
     # Get best training job results
     best_training_job = tuner.best_training_job()

@@ -18,6 +18,7 @@ mean-return-above-threshold.
 """
 
 from __future__ import annotations
+import traceback
 import os
 from pathlib import Path
 import xgboost as xgb
@@ -96,4 +97,8 @@ def main() -> None:
 
 # Run the script when executed inside the container
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        raise
