@@ -191,35 +191,6 @@ def _launch_hyperparameter_optimization(
     # Define hyperparameter ranges from config
     hyperparameter_ranges = _get_hpo_parameter_ranges(modeling_config)
 
-    # # Create base estimator without fixed hyperparameters
-    # base_estimator = XGBoost(
-    #     entry_point=script_cfg['entry_point'],
-    #     source_dir=script_cfg['source_dir'],
-    #     framework_version=modeling_config['framework']['version'],
-    #     instance_type=modeling_config['metaparams']['instance_type'],
-    #     instance_count=modeling_config['metaparams']['instance_count'],
-    #     role=wallets_config['aws']['modeler_arn'],
-    #     output_path=output_path
-    # )
-
-    # # Configure HPO tuner
-    # metric_definitions = [
-    #     {
-    #         'Name': 'validation:aucpr',  # Use colon for HPO
-    #         'Regex': r'eval_aucpr:([0-9\.]+)'  # Extract from your print statement
-    #     }
-    # ]
-
-    # tuner = HyperparameterTuner(
-    #     estimator=base_estimator,
-    #     objective_metric_name=objective_metric_name,
-    #     objective_type='Maximize',  # We want to maximize PR-AUC
-    #     metric_definitions=metric_definitions,
-    #     hyperparameter_ranges=hyperparameter_ranges,
-    #     max_jobs=max_jobs,
-    #     max_parallel_jobs=max_parallel_jobs
-    # )
-
     # Convert the base param 'num_round' into the script-based 'num_boost_round'
     hyperparams = modeling_config['training']['hyperparameters'].copy()
     if 'num_round' in hyperparams:
