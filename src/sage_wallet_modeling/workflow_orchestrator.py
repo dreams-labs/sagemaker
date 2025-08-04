@@ -4,6 +4,7 @@ model training coordination, and results handling.
 """
 import logging
 import tempfile
+from typing import List
 import os
 from pathlib import Path
 from dataclasses import dataclass
@@ -309,18 +310,24 @@ class WalletWorkflowOrchestrator:
     def upload_concatenated_training_data(
             self,
             overwrite_existing: bool = False,
-            splits = None
+            splits: List = None
         ) -> dict[str, str]:
         """
         Upload concatenated training data splits to S3, organized under a single folder.
         Params:
         - overwrite_existing (bool): If True, overwrites existing S3 objects.
+        - splits (list): which splits to upload
         Returns:
         - dict: Mapping of split_name to S3 URI for uploaded concatenated data.
         """
         # Assign to unique list
         if splits is None:
             splits = ['train', 'eval', 'test', 'val']
+
+        # Append upload_y if we need it for custom transform
+        if self.modeling_config['target']['custom_transform']:
+            y_splits = [f"{split}_y" for split in splits]
+            splits = splits + y_splits
 
         # Determine S3 target paths
         bucket = self.wallets_config['aws']['training_bucket']
