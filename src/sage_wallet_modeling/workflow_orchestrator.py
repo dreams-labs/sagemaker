@@ -280,6 +280,7 @@ class WalletWorkflowOrchestrator:
             for offset in split_offsets:
                 if offset not in raw_data_by_date:
                     raise KeyError(f"No raw data found for offset {offset}")
+                if y_split_key not in raw_data_by_date[offset]:
                     raise KeyError(f"No '{y_split_key}' split found for offset {offset}")
 
                 # Use RAW y-data instead of preprocessed
@@ -297,7 +298,6 @@ class WalletWorkflowOrchestrator:
                         f"rows to {y_out_file}")
 
     @u.timing_decorator
-    def upload_concatenated_training_data(self, overwrite_existing: bool = False) -> dict[str, str]:
     def upload_concatenated_training_data(
             self,
             overwrite_existing: bool = False,
@@ -310,6 +310,10 @@ class WalletWorkflowOrchestrator:
         Returns:
         - dict: Mapping of split_name to S3 URI for uploaded concatenated data.
         """
+        # Assign to unique list
+        if splits is None:
+            splits = ['train', 'eval', 'test', 'val']
+
         # Determine S3 target paths
         bucket = self.wallets_config['aws']['training_bucket']
         # Use configured concatenated directory
@@ -331,11 +335,11 @@ class WalletWorkflowOrchestrator:
             local_dir = f"{local_dir}_dev"
         concat_dir = concat_root / local_dir
 
-        splits = ['train', 'eval', 'test', 'val']
-        logger.info("Beginning upload of concatenated training data...")
-        for split in splits:
-
-            # Check if file already exists in S3
+        logger.info(f"Beginning upload of concatenated training data for splits {splits}...")
+        # Parallel upload of concatenated splits
+        n_threads = self.wallets_config['n_threads']['upload_all_training_data']
+        logger.info(f"Uploading concatenated splits in parallel with {n_threads} threads...")
+        def _upload_split(split: str):
             s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
             s3_uri = f"s3://{bucket}/{s3_key}"
 
@@ -347,23 +351,23 @@ class WalletWorkflowOrchestrator:
                 if not overwrite_existing:
                     logger.info(f"File exists, skipping upload of concatenated split '{split}': {s3_key}")
                     upload_results[split] = s3_uri
-                    continue
+                    return
                 else:
                     logger.info(f"Overwriting existing file '{s3_uri}'...")
             # Error emitted if the file can't be found
             except ClientError:
                 logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
-                pass
 
-            # Load local file
+            # Upload local file
             local_file = concat_dir / f"{split}.csv"
             if not local_file.exists():
                 raise FileNotFoundError(f"Concatenated file not found: {local_file}")
-
-            # Upload directly
             s3_client.upload_file(str(local_file), bucket, s3_key)
             logger.info(f"Uploaded concatenated split '{split}' to {s3_uri}")
             upload_results[split] = s3_uri
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            executor.map(_upload_split, splits)
 
         return upload_results
 
