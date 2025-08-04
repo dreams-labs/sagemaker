@@ -21,7 +21,7 @@ script_mode:
 # KeyParam Target Var
 target:
     classification:
-        threshold: 0.2  # if target > {threshold}, class = 1
+        threshold: 0.25  # if target > {threshold}, class = 1
 
 training:
     model_type: classification  # regression or classification
@@ -31,24 +31,24 @@ training:
     hyperparameters:
 
         # trees
-        num_round: 500
-        max_depth: 6
-        min_child_weight: 25
-        eta: 0.1
-        early_stopping_rounds: 15
+        num_round: 300
+        max_depth: 7
+        min_child_weight: 13
+        eta: 0.5
+        early_stopping_rounds: 25
 
         # sampling
         subsample: 0.8
         colsample_bytree: 0.8
-        scale_pos_weight: 50  # 1 to disable
+        scale_pos_weight: 5  # 1 to disable
 
         # feature selection
-        # alpha: 2   # 0 to disable
-        # reg_lambda: 10  # 1 to disable
+        alpha: 0.75   # 0 to disable
+        lambda: 1.50  # 1 to disable
 
     # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization
-        enabled: True
+        # enabled: True
         objective_metric_name: validation:aucpr
         objective_type: maximize
         param_ranges:
@@ -58,10 +58,10 @@ training:
             # eta:        [0.05, 0.2]
             # subsample: [0.6, 1.0]
             # colsample_bytree: [0.6, 1.0]
-            alpha:  [0, 10]
-            lambda: [1, 20]  # needs 'reg_' to escape reserved keyword
-            # scale_pos_weight: [1, 100]
-        max_jobs: 60
+            # alpha:  [0, 10]
+            # lambda: [1, 20]  # needs 'reg_' to escape reserved keyword
+            scale_pos_weight: [1, 100]
+        max_jobs: 40
         max_parallel_jobs: 10
 
 predicting:
