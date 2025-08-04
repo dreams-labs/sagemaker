@@ -1002,7 +1002,16 @@ class WalletWorkflowOrchestrator:
         for data_type in data_types:
             for split in splits:
                 # Build filename pattern
-                pattern = f"{data_type}_{split}*{date_suffix}.parquet"
+                if (
+                    data_type == 'y' and
+                    self.modeling_config.get('target', {}).get('custom_transform', False)
+                ):
+                    # Handle full y loading
+                    pattern = f"y_{split}_full*{date_suffix}.parquet"
+                else:
+                    # X loading and base y loading
+                    pattern = f"{data_type}_{split}*{date_suffix}.parquet"
+
                 matching_files = list(self.data_folder.glob(pattern))
 
                 if not matching_files:

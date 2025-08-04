@@ -107,9 +107,14 @@ class SageWalletsPreprocessor:
 
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
-                # Train and Eval sets need the target var appended as first column
-                combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
-                processed_data[split_name] = combined_data
+                # don't add y to X if we're going to customize it in the container
+                if not self.modeling_config['target']['custom_transform']:
+                    # Train and Eval sets need the target var appended as first column
+                    combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
+                    processed_data[split_name] = combined_data
+                else:
+                    # For custom transforms, keep X and y separate (X only for train/eval)
+                    processed_data[split_name] = x_preprocessed
             else:
                 # Test and Val sets are only used for scoring, and shouldn't have targets
                 processed_data[split_name] = x_preprocessed
@@ -256,6 +261,11 @@ class SageWalletsPreprocessor:
         Returns:
         - DataFrame: Preprocessed target data (continuous or binary based on model_type)
         """
+        # Escape if we're preprocessing inside container later on
+        if self.modeling_config['target'].get('custom_transform',False):
+            logger.info("Skipped preprocessing of y_full file.")
+            return y_df
+
         if len(y_df.columns) != 1:
             raise ValueError(f"Target DataFrame should have exactly 1 column, "
                             f"found {len(y_df.columns)} in {split_name}")
