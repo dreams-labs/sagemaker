@@ -201,7 +201,7 @@ class WalletModeler:
             # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
             bucket_name = self.wallets_config['aws']['script_model_bucket']
             base_prefix = f"model-outputs/{self.upload_directory}/{self.date_suffix}/"
-            job_name_pattern = f"wscript-{self.upload_directory}-{self.date_suffix}-"
+            job_name_pattern = f"wscr-{self.upload_directory[:8]}-{self.date_suffix}-"
             model_file_path = "output/model.tar.gz"
         else:
             # Container-mode path: s3://{training_bucket}/sagemaker-models/{upload_directory}/
