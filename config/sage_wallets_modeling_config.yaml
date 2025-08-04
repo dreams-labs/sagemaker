@@ -5,9 +5,11 @@ framework:
 
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
-    instance_type: ml.c6i.4xlarge
+    instance_type: ml.m6i.2xlarge
+    # instance_type: ml.c5.9xlarge
+    # instance_type: ml.c6i.4xlarge
     instance_count: 1
-    batch_trans_instance_type: ml.c5.9xlarge
+    batch_trans_instance_type: ml.c5.2xlarge
     batch_trans_instance_count: 1
 
 script_mode:
@@ -16,6 +18,7 @@ script_mode:
     # entry_point: temporal_cv_model_entry.py
     source_dir: ../src/script_modeling
 
+# KeyParam Target Var
 target:
     classification:
         threshold: 0.2  # if target > {threshold}, class = 1
@@ -26,24 +29,40 @@ training:
 
     #KeyParam Hyperparameters
     hyperparameters:
-        num_round: 350
-        max_depth: 3
+
+        # trees
+        num_round: 500
+        max_depth: 6
+        min_child_weight: 25
         eta: 0.1
-        subsample: 0.8
-        colsample_bytree: 0.8
-        scale_pos_weight: 100
         early_stopping_rounds: 15
 
+        # sampling
+        subsample: 0.8
+        colsample_bytree: 0.8
+        scale_pos_weight: 50  # 1 to disable
+
+        # feature selection
+        # alpha: 2   # 0 to disable
+        # reg_lambda: 10  # 1 to disable
+
+    # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization
         enabled: True
-        objective_metric_name: eval:cv_auc_pr
+        objective_metric_name: validation:aucpr
         objective_type: maximize
-        hyperparameter_ranges:
-            max_depth: "IntegerParameter(3,10)"
-            eta: "ContinuousParameter(0.01,0.3)"
-            subsample: "ContinuousParameter(0.5,1.0)"
-        max_jobs: 20
-        max_parallel_jobs: 4
-        
+        param_ranges:
+        # Allowed values in the built in mode: [colsample_bytree, num_parallel_tree, max_depth, colsample_bynode, lambda, eta, alpha, num_round, colsample_bylevel, subsample, min_child_weight, max_delta_step, gamma]
+            max_depth:  [2, 8]
+            min_child_weight:  [5, 500]
+            # eta:        [0.05, 0.2]
+            # subsample: [0.6, 1.0]
+            # colsample_bytree: [0.6, 1.0]
+            alpha:  [0, 10]
+            lambda: [1, 20]  # needs 'reg_' to escape reserved keyword
+            # scale_pos_weight: [1, 100]
+        max_jobs: 60
+        max_parallel_jobs: 10
+
 predicting:
     y_pred_threshold: 0.8 # predictions above this are positive
