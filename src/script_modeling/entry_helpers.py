@@ -37,22 +37,14 @@ def load_hyperparams() -> argparse.Namespace:
     ```
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eta", type=float, default=0.1,
-                        help="Learning rate for XGBoost (eta)")
-    parser.add_argument("--max_depth", type=int, default=6,
-                        help="Maximum tree depth for XGBoost")
-    parser.add_argument("--min_child_weight", type=int, default=6,
-                        help="Maximum tree depth for XGBoost")
-    parser.add_argument("--num_boost_round", type=int, default=500,
-                        help="Number of boosting rounds")
-    parser.add_argument("--subsample", type=float, default=1.0,
-                        help="Subsample ratio of the training instance")
-    parser.add_argument("--early_stopping_rounds", type=int, default=30,
-                        help="Rounds for early stopping on validation set")
-    parser.add_argument("--colsample_bytree", type=float, default=0.9,
-                        help="Rounds for early stopping on validation set")
-    parser.add_argument("--scale_pos_weight", type=float, default=0.9,
-                        help="Rounds for early stopping on validation set")
+    parser.add_argument("--eta", type=float, default=0.1)
+    parser.add_argument("--max_depth", type=int, default=6)
+    parser.add_argument("--min_child_weight", type=int, default=6)
+    parser.add_argument("--num_boost_round", type=int, default=500)
+    parser.add_argument("--subsample", type=float, default=1.0)
+    parser.add_argument("--early_stopping_rounds", type=int, default=30)
+    parser.add_argument("--colsample_bytree", type=float, default=0.9)
+    parser.add_argument("--scale_pos_weight", type=float, default=0.9)
     parser.add_argument("--alpha", type=float, default=0.9)
     parser.add_argument("--lambda", type=float, default=0.9)
     return parser.parse_args()
