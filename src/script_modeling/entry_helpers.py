@@ -4,6 +4,19 @@ import pandas as pd
 import xgboost as xgb
 
 
+HYPERPARAMETER_TYPES = {
+    'num_boost_round': int,
+    'max_depth': int,
+    'min_child_weight': int,
+    'eta': float,
+    'early_stopping_rounds': int,
+    'colsample_bytree': float,
+    'subsample': float,
+    'scale_pos_weight': float,
+    'alpha': float,           # L1 regularization
+    'lambda': float,          # L2 regularization
+}
+
 def load_hyperparams() -> argparse.Namespace:
     """
     Parse hyperparameters injected by SageMaker for model training.
@@ -28,16 +41,20 @@ def load_hyperparams() -> argparse.Namespace:
                         help="Learning rate for XGBoost (eta)")
     parser.add_argument("--max_depth", type=int, default=6,
                         help="Maximum tree depth for XGBoost")
-    parser.add_argument("--subsample", type=float, default=1.0,
-                        help="Subsample ratio of the training instance")
+    parser.add_argument("--min_child_weight", type=int, default=6,
+                        help="Maximum tree depth for XGBoost")
     parser.add_argument("--num_boost_round", type=int, default=500,
                         help="Number of boosting rounds")
+    parser.add_argument("--subsample", type=float, default=1.0,
+                        help="Subsample ratio of the training instance")
     parser.add_argument("--early_stopping_rounds", type=int, default=30,
                         help="Rounds for early stopping on validation set")
     parser.add_argument("--colsample_bytree", type=float, default=0.9,
                         help="Rounds for early stopping on validation set")
     parser.add_argument("--scale_pos_weight", type=float, default=0.9,
                         help="Rounds for early stopping on validation set")
+    parser.add_argument("--alpha", type=float, default=0.9)
+    parser.add_argument("--reg_lambda", type=float, default=0.9)
     return parser.parse_args()
 
 
@@ -80,9 +97,14 @@ def build_booster_params(args: argparse.Namespace) -> dict:
         "eval_metric": "aucpr",
         "eta": args.eta,
         "max_depth": args.max_depth,
+        "min_child_weight": args.min_child_weight,
+        "num_boost_round": args.num_boost_round,
+        "early_stopping_rounds": args.early_stopping_rounds,
         "subsample": args.subsample,
         "colsample_bytree": args.colsample_bytree,
         "scale_pos_weight": args.scale_pos_weight,
+        "alpha": args.alpha,
+        "lambda": args.reg_lambda,
         "seed": 42,
     }
 
