@@ -9,9 +9,11 @@ from typing import Dict, Union
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
 from sagemaker.tuner import HyperparameterTuner
-from sagemaker.parameter import IntegerParameter, ContinuousParameter, CategoricalParameter
+from sagemaker.parameter import IntegerParameter, ContinuousParameter
 
 # Local module imports
+from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
+import utils as u
 from utils import ConfigError
 
 logger = logging.getLogger(__name__)
@@ -223,6 +225,8 @@ def _launch_hyperparameter_optimization(
     logger.info(f"Launching HPO job: {job_name}")
     logger.info(f"Max jobs: {max_jobs}, Max parallel: {max_parallel_jobs}")
     logger.info(f"Optimizing: {objective_metric_name}")
+    ambient_player = u.AmbientPlayer()
+    ambient_player.start('ship_power_room_loop')
 
     # Launch HPO
     tuner.fit(
@@ -237,6 +241,8 @@ def _launch_hyperparameter_optimization(
 
     logger.info(f"HPO completed. Best training job: {best_training_job}")
     logger.info(f"Best model URI: {best_model_uri}")
+    ambient_player.stop()
+    u.notify('logo_warm_delayed_tech')
 
     return {
         "hpo_job_name": job_name,
@@ -313,33 +319,19 @@ def train_temporal_cv_script_model(
 # ---------------------------------------------------------------------------
 def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, Union[int, float]]:
     """
-    Remap and filter raw hyperparameters for script-mode.
+    Remap num_round to num_boost_round for script-mode compatibility. Why?
+     * Built-in container: Uses num_round
+     * Script-mode: Uses num_boost_round
     """
-    hp: Dict[str, Union[int, float]] = {}
-    # remap rounds
-    if 'num_round' in raw_hp:
-        hp['num_boost_round'] = raw_hp['num_round']
-    elif 'num_boost_round' in raw_hp:
-        hp['num_boost_round'] = raw_hp['num_boost_round']
+    hp = raw_hp.copy()
 
-    # allowed flags
-    allowed = {
-        'num_boost_round',
-        'eta',
-        'max_depth',
-        'subsample',
-        'colsample_bytree',
-        'early_stopping_rounds',
-        'scale_pos_weight',
-    }
-    for key in allowed - {'num_boost_round'}:
-        if key in raw_hp:
-            hp[key] = raw_hp[key]
+    # Handle built-in vs script-mode naming difference
+    if 'num_round' in hp and 'num_boost_round' not in hp:
+        hp['num_boost_round'] = hp.pop('num_round')
+    elif 'num_round' in hp:
+        # Both present - remove num_round, keep num_boost_round
+        hp.pop('num_round')
 
-    # warn unsupported
-    unsupported = set(raw_hp.keys()) - {'num_round', 'num_boost_round'} - allowed
-    if unsupported:
-        logger.warning(f"Ignoring unsupported hyperparameters: {unsupported}")
     return hp
 
 
@@ -387,45 +379,31 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
     hpo_config = modeling_config['training']['hpo']
     param_ranges_config = hpo_config['param_ranges']
 
-    # Define parameter types explicitly
-    integer_params = {
-        'max_depth', 'min_child_weight', 'num_boost_round',
-        'early_stopping_rounds', 'max_delta_step'
-    }
-
-    continuous_params = {
-        'eta', 'learning_rate', 'gamma', 'subsample', 'colsample_bytree',
-        'colsample_bylevel', 'colsample_bynode', 'reg_alpha', 'reg_lambda',
-        'scale_pos_weight', 'base_score'
-    }
-
-    categorical_params = {
-        'booster', 'tree_method', 'grow_policy', 'objective', 'eval_metric'
-    }
-
     ranges = {}
     for param_name, range_values in param_ranges_config.items():
 
-        if param_name in integer_params:
+        # Get the type from centralized source
+        if param_name not in HYPERPARAMETER_TYPES:
+            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must be defined in HYPERPARAMETER_TYPES.")
+
+        param_type = HYPERPARAMETER_TYPES[param_name]
+
+        # Convert Python type to SageMaker parameter object
+        if param_type == int:
             if len(range_values) != 2:
                 raise ConfigError(f"Integer parameter '{param_name}' must be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = IntegerParameter(min_val, max_val)
 
-        elif param_name in continuous_params:
+        elif param_type == float:
             if len(range_values) != 2:
-                raise ConfigError(f"Continuous parameter '{param_name}' must be [min, max], got {range_values}")
+                raise ConfigError(f"Float parameter '{param_name}' must be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = ContinuousParameter(min_val, max_val)
 
-        elif param_name in categorical_params:
-            if not isinstance(range_values, list) or len(range_values) < 2:
-                raise ConfigError(f"Categorical parameter '{param_name}' must be a list of choices, got {range_values}")
-            ranges[param_name] = CategoricalParameter(range_values)
-
         else:
-            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must be defined in integer_params, "
-                           f"continuous_params, or categorical_params sets.")
+            # Handle categorical if needed later
+            raise ConfigError(f"Unsupported parameter type {param_type} for '{param_name}'")
 
     logger.info(f"HPO will tune: {list(ranges.keys())}")
     return ranges

@@ -4,6 +4,19 @@ import pandas as pd
 import xgboost as xgb
 
 
+HYPERPARAMETER_TYPES = {
+    'num_boost_round': int,
+    'max_depth': int,
+    'min_child_weight': int,
+    'eta': float,
+    'early_stopping_rounds': int,
+    'colsample_bytree': float,
+    'subsample': float,
+    'scale_pos_weight': float,
+    'alpha': float,           # L1 regularization
+    'lambda': float,          # L2 regularization
+}
+
 def load_hyperparams() -> argparse.Namespace:
     """
     Parse hyperparameters injected by SageMaker for model training.
@@ -24,20 +37,16 @@ def load_hyperparams() -> argparse.Namespace:
     ```
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eta", type=float, default=0.1,
-                        help="Learning rate for XGBoost (eta)")
-    parser.add_argument("--max_depth", type=int, default=6,
-                        help="Maximum tree depth for XGBoost")
-    parser.add_argument("--subsample", type=float, default=1.0,
-                        help="Subsample ratio of the training instance")
-    parser.add_argument("--num_boost_round", type=int, default=500,
-                        help="Number of boosting rounds")
-    parser.add_argument("--early_stopping_rounds", type=int, default=30,
-                        help="Rounds for early stopping on validation set")
-    parser.add_argument("--colsample_bytree", type=float, default=0.9,
-                        help="Rounds for early stopping on validation set")
-    parser.add_argument("--scale_pos_weight", type=float, default=0.9,
-                        help="Rounds for early stopping on validation set")
+    parser.add_argument("--eta", type=float, default=0.1)
+    parser.add_argument("--max_depth", type=int, default=6)
+    parser.add_argument("--min_child_weight", type=int, default=6)
+    parser.add_argument("--num_boost_round", type=int, default=500)
+    parser.add_argument("--subsample", type=float, default=1.0)
+    parser.add_argument("--early_stopping_rounds", type=int, default=30)
+    parser.add_argument("--colsample_bytree", type=float, default=0.9)
+    parser.add_argument("--scale_pos_weight", type=float, default=0.9)
+    parser.add_argument("--alpha", type=float, default=0.9)
+    parser.add_argument("--lambda", type=float, default=0.9)
     return parser.parse_args()
 
 
@@ -62,29 +71,22 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
 
 
 def build_booster_params(args: argparse.Namespace) -> dict:
-    """
-    Construct the parameter dict for XGBoost training from parsed args.
-
-    Business logic:
-    - Sets objective to binary logistic for wallet classification.
-    - Uses "aucpr" as the evaluation metric to focus on top-ranked predictions.
-    - Maps CLI args to XGBoost params.
-
-    Usage in entry scripts:
-    ```python
-    params = build_booster_params(args)
-    ```
-    """
-    return {
+    """Construct XGBoost params by automatically unpacking all provided hyperparameters."""
+    # Base parameters that are always included
+    params = {
         "objective": "binary:logistic",
         "eval_metric": "aucpr",
-        "eta": args.eta,
-        "max_depth": args.max_depth,
-        "subsample": args.subsample,
-        "colsample_bytree": args.colsample_bytree,
-        "scale_pos_weight": args.scale_pos_weight,
         "seed": 42,
     }
+
+    # Convert args to dict and add all non-None hyperparameters
+    args_dict = vars(args)
+
+    for param_name, value in args_dict.items():
+        if value is not None:
+            params[param_name] = value
+
+    return params
 
 
 def print_metrics_and_save(booster: xgb.Booster, scores: list, model_dir: Path) -> None:
