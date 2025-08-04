@@ -11,6 +11,7 @@ WalletWorkflowOrchestrator: uses this class for model construction
 import logging
 from typing import Dict,Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import tarfile
 from pathlib import Path
 import json
@@ -391,6 +392,32 @@ class WalletModeler:
             self._download_batch_transform_preds(result['predictions_uri'], dataset_type)
 
         return result
+
+
+    def batch_predict_test_and_val(self) -> dict[str, dict]:
+        """
+        Run batch transform predictions for 'test' and 'val' in parallel.
+        Returns:
+        - dict: Mapping split name ('test' or 'val') to the batch transform result dict.
+        """
+        splits = ['test', 'val']
+        results: dict[str, dict] = {}
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_to_split = {
+                executor.submit(
+                    self.predict_with_batch_transform,
+                    dataset_type=split,
+                    download_preds=True,
+                    job_name_suffix=f"concat-{split}"
+                ): split
+                for split in splits
+            }
+            for future in as_completed(future_to_split):
+                split = future_to_split[future]
+                results[split] = future.result()
+
+        return results
 
 
     def download_existing_model(self) -> str:
