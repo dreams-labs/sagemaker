@@ -267,8 +267,14 @@ class WalletWorkflowOrchestrator:
         for date_suffix in self.date_suffixes:
             raw_data_by_date[date_suffix] = self._load_single_date_data(date_suffix)
 
-        # Concatenate RAW y-files for test and val splits only
-        y_splits_to_export = ['test', 'val']
+        if self.modeling_config['target']['custom_transform']:
+            # Concatenate full y files for all splits
+            y_splits_to_export = ['train', 'eval', 'test', 'val']
+            include_header = True
+        else:
+            # Concatenate y-files for test and val splits only
+            y_splits_to_export = ['test', 'val']
+            include_header = False
         for split in y_splits_to_export:
             split_offsets = offsets_map.get(split, [])
             if not split_offsets:
@@ -294,7 +300,7 @@ class WalletWorkflowOrchestrator:
 
             concatenated_y = pd.concat(y_dfs, ignore_index=True)
             y_out_file = concat_base / f"{split}_y.csv"
-            concatenated_y.to_csv(y_out_file, index=False, header=False)
+            concatenated_y.to_csv(y_out_file, index=False, header=include_header)
             logger.info(f"Saved concatenated {split}_y.csv with {len(concatenated_y)} "
                         f"rows to {y_out_file}")
 
