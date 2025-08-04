@@ -340,6 +340,7 @@ class WalletModeler:
         return response['HyperParameterTuningJobSummaries'][0]['HyperParameterTuningJobName']
 
 
+    @u.timing_decorator
     def predict_with_batch_transform(
             self,
             dataset_type: str = 'val',
@@ -394,6 +395,7 @@ class WalletModeler:
         return result
 
 
+    @u.timing_decorator
     def batch_predict_test_and_val(self) -> dict[str, dict]:
         """
         Run batch transform predictions for 'test' and 'val' in parallel.
