@@ -64,11 +64,9 @@ def main() -> None:
     booster_params = h.build_booster_params(args)
 
     # Define custom PR-AUC evaluation metric
-    def pr_auc_eval(preds, dtrain):
+    def eval_aucpr(preds, dtrain):
         labels = dtrain.get_label()
-        score = average_precision_score(labels, preds)
-        print(f"validation:aucpr={score}")
-        return 'eval_aucpr', score
+        return 'eval_aucpr', average_precision_score(labels, preds)
 
     # Train with early stopping and per-round PR-AUC logging
     booster = xgb.train(
@@ -77,7 +75,7 @@ def main() -> None:
         num_boost_round=args.num_boost_round,
         evals=[(validation_matrix, "eval")],
         early_stopping_rounds=args.early_stopping_rounds,
-        feval=pr_auc_eval,
+        feval=eval_aucpr,
         maximize=True,
         verbose_eval=1,
     )

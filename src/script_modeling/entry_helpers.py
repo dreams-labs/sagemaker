@@ -54,7 +54,7 @@ def load_hyperparams() -> argparse.Namespace:
     parser.add_argument("--scale_pos_weight", type=float, default=0.9,
                         help="Rounds for early stopping on validation set")
     parser.add_argument("--alpha", type=float, default=0.9)
-    parser.add_argument("--reg_lambda", type=float, default=0.9)
+    parser.add_argument("--lambda", type=float, default=0.9)
     return parser.parse_args()
 
 
@@ -79,34 +79,22 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
 
 
 def build_booster_params(args: argparse.Namespace) -> dict:
-    """
-    Construct the parameter dict for XGBoost training from parsed args.
-
-    Business logic:
-    - Sets objective to binary logistic for wallet classification.
-    - Uses "aucpr" as the evaluation metric to focus on top-ranked predictions.
-    - Maps CLI args to XGBoost params.
-
-    Usage in entry scripts:
-    ```python
-    params = build_booster_params(args)
-    ```
-    """
-    return {
+    """Construct XGBoost params by automatically unpacking all provided hyperparameters."""
+    # Base parameters that are always included
+    params = {
         "objective": "binary:logistic",
         "eval_metric": "aucpr",
-        "eta": args.eta,
-        "max_depth": args.max_depth,
-        "min_child_weight": args.min_child_weight,
-        "num_boost_round": args.num_boost_round,
-        "early_stopping_rounds": args.early_stopping_rounds,
-        "subsample": args.subsample,
-        "colsample_bytree": args.colsample_bytree,
-        "scale_pos_weight": args.scale_pos_weight,
-        "alpha": args.alpha,
-        "lambda": args.reg_lambda,
         "seed": 42,
     }
+
+    # Convert args to dict and add all non-None hyperparameters
+    args_dict = vars(args)
+
+    for param_name, value in args_dict.items():
+        if value is not None:
+            params[param_name] = value
+
+    return params
 
 
 def print_metrics_and_save(booster: xgb.Booster, scores: list, model_dir: Path) -> None:

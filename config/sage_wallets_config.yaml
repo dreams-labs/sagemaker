@@ -5,6 +5,10 @@ training_data: #SageMaker
     training_data_directory: dda_930_concat_model  # where to load local csvs from
     local_directory: dda_930_concat_model  # where to store local artifacts
     upload_directory: dda-930-vt-perf  # new S3 folder name in bucket training_data_processed
+
+    # local_directory: dda_930_concat_v2  # where to store local artifacts
+    # upload_directory: dda-930-concat-v2  # new S3 folder name in bucket training_data_processed
+
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
@@ -41,6 +45,9 @@ training_data: #SageMaker
         # '241231',
         # '250130',
         # '250301',
+        # '250331',
+        # '250430',
+        # '250530',
     ]
     eval_offsets: [
         '241002',
