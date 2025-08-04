@@ -760,7 +760,7 @@ class WalletWorkflowOrchestrator:
         # Use all offsets that have preprocessed CSVs available
         self.date_suffixes = list(dict.fromkeys(train_offsets + eval_offsets + test_offsets))
 
-        # 3) Prepare s3_uris dict keyed by our special suffix
+        # Prepare s3_uris dict keyed by our special suffix
         synthetic_suffix = 'concat'
         s3_uris = {
             synthetic_suffix: {
@@ -768,6 +768,9 @@ class WalletWorkflowOrchestrator:
                 'eval':  upload_results['eval']
             }
         }
+        if self.modeling_config['target']['custom_transform']:
+            s3_uris[synthetic_suffix]['train_y'] = upload_results['train_y']
+            s3_uris[synthetic_suffix]['eval_y'] = upload_results['eval_y']
 
         # Launch training via WalletModeler
         modeler = WalletModeler(
@@ -1020,10 +1023,10 @@ class WalletWorkflowOrchestrator:
                     self.modeling_config.get('target', {}).get('custom_transform', False)
                 ):
                     # Handle full y loading
-                    pattern = f"y_{split}_full*{date_suffix}.parquet"
+                    pattern = f"y_{split}_full_{date_suffix}.parquet"
                 else:
                     # X loading and base y loading
-                    pattern = f"{data_type}_{split}*{date_suffix}.parquet"
+                    pattern = f"{data_type}_{split}_{date_suffix}.parquet"
 
                 matching_files = list(self.data_folder.glob(pattern))
 
