@@ -202,6 +202,7 @@ class WalletWorkflowOrchestrator:
         return preprocessed_by_date
 
 
+    @u.timing_decorator
     def concatenate_all_preprocessed_data(self) -> None:
         """
         Concatenate preprocessed CSVs across configured offsets for each split and
@@ -296,6 +297,7 @@ class WalletWorkflowOrchestrator:
             concatenated_y.to_csv(y_out_file, index=False, header=False)
             logger.info(f"Saved concatenated {split}_y.csv with {len(concatenated_y)} "
                         f"rows to {y_out_file}")
+
 
     @u.timing_decorator
     def upload_concatenated_training_data(
