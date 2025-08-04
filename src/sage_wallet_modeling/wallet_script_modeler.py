@@ -9,10 +9,11 @@ from typing import Dict, Union
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
 from sagemaker.tuner import HyperparameterTuner
-from sagemaker.parameter import IntegerParameter, ContinuousParameter, CategoricalParameter
+from sagemaker.parameter import IntegerParameter, ContinuousParameter
 
 # Local module imports
 from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
+import utils as u
 from utils import ConfigError
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,8 @@ def _launch_hyperparameter_optimization(
     logger.info(f"Launching HPO job: {job_name}")
     logger.info(f"Max jobs: {max_jobs}, Max parallel: {max_parallel_jobs}")
     logger.info(f"Optimizing: {objective_metric_name}")
+    ambient_player = u.AmbientPlayer()
+    ambient_player.start('ship_power_room_loop')
 
     # Launch HPO
     tuner.fit(
@@ -238,6 +241,8 @@ def _launch_hyperparameter_optimization(
 
     logger.info(f"HPO completed. Best training job: {best_training_job}")
     logger.info(f"Best model URI: {best_model_uri}")
+    ambient_player.stop()
+    u.notify('logo_warm_delayed_tech')
 
     return {
         "hpo_job_name": job_name,
