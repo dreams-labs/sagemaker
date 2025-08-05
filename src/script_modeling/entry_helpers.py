@@ -15,7 +15,8 @@ HYPERPARAMETER_TYPES = {
     'subsample': float,
     'scale_pos_weight': float,
     'alpha': float,           # L1 regularization
-    'lambda': float           # L2 regularization
+    'lambda': float,          # L2 regularization
+    'threshold': float
 }
 
 def load_hyperparams() -> argparse.Namespace:

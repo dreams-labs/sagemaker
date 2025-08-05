@@ -7,6 +7,7 @@ import pandas as pd
 # Add wallet_insights to path    # pylint:disable=wrong-import-position
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
+from script_modeling.custom_transforms import preprocess_custom_labels
 import wallet_insights.model_evaluation as wime
 from utils import ConfigError
 
@@ -192,7 +193,12 @@ def create_concatenated_sagemaker_evaluator(
     test_df = pd.read_csv(data_path / "test.csv", header=None)
 
     y_train = train_df.iloc[:, 0]
-    X_train = train_df.iloc[:, 1:]
+    if modeling_config['target']['custom_transform']:
+        # No y appended
+        X_train = train_df
+    else:
+        # Appended y in first column
+        X_train = train_df.iloc[:, 1:]
     X_test = test_df
 
     # Ensure feature count matches
@@ -356,7 +362,8 @@ def load_bt_sagemaker_predictions(
 
 def load_concatenated_y(
     data_type: str,
-    wallets_config: dict
+    wallets_config: dict,
+    modeling_config: dict
 ) -> pd.Series:
     """
     Load concatenated target variable series for concatenated datasets.
@@ -364,6 +371,7 @@ def load_concatenated_y(
     Params:
     - data_type (str): Name of data set type, e.g., 'test' or 'val'.
     - wallets_config (dict): Configuration for training data paths.
+    - modeling_config (dict): Configuration for modeling labels.
 
     Returns:
     - target_series (pd.Series): Series of target values loaded from CSV.
@@ -372,11 +380,22 @@ def load_concatenated_y(
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
     local_dir = wallets_config['training_data']['local_directory']
     data_path = concat_dir / local_dir
-
-    # Load the target CSV: test_y.csv or val_y.csv depending on data_type
     csv_path = data_path / f"{data_type}_y.csv"
-    target_df = pd.read_csv(csv_path,header=None)
-    target_series = pd.Series(target_df.iloc[:, 0].values)
+
+    # Handle full y df from custom transform pipeline
+    if modeling_config['target']['custom_transform']:
+        full_y_df = pd.read_csv(csv_path)
+        target_series = pd.Series(preprocess_custom_labels(full_y_df, modeling_config))
+        target_df = pd.DataFrame(target_series)
+        # target_df = target_df[[modeling_config['target']['target_var']]]
+        # target_series = target_df[modeling_config['target']['target_var']]
+
+    # Handle single column y df from base pipeline
+    else:
+        # Load the target CSV: test_y.csv or val_y.csv depending on data_type
+        target_df = pd.read_csv(csv_path,header=None)
+        target_series = pd.Series(target_df.iloc[:, 0].values)
+
 
     # Check for NaN values
     if target_series.isna().any():
