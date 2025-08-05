@@ -187,7 +187,7 @@ class WalletModeler:
         }
 
 
-    def load_existing_model(self):
+    def load_existing_model(self, model_uri: str = None):
         """
         Load the most recent trained model for a given date_suffix.
         Handles both container-mode and script-mode model storage patterns.
@@ -195,6 +195,29 @@ class WalletModeler:
         Returns:
         - dict: Contains model URI and training job name of most recent model
         """
+        # If a specific model_uri is provided, validate and load it directly
+        if model_uri:
+            if not model_uri.startswith('s3://'):
+                raise ValueError(f"Invalid S3 URI format: {model_uri}")
+            # Parse bucket and key
+            _bucket, _key = model_uri.replace('s3://', '', 1).split('/', 1)
+            _s3_client = self.sagemaker_session.boto_session.client('s3')
+            try:
+                _s3_client.head_object(Bucket=_bucket, Key=_key)
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    raise FileNotFoundError(f"Model file not found at specified model_uri: {model_uri}") from e
+                else:
+                    raise
+            # Store and return
+            self.model_uri = model_uri
+            logger.info(f"Loaded model from specified model_uri: {model_uri}")
+            return {
+                'model_uri': model_uri,
+                'training_job_name': None,
+                'timestamp': None
+            }
+
         # Check if script-mode is enabled
         script_mode_enabled = self.modeling_config.get('script_mode', {}).get('enabled', False)
 
