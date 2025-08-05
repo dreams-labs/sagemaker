@@ -24,7 +24,6 @@ import json
 from pathlib import Path
 import xgboost as xgb
 import pandas as pd
-from sklearn.metrics import average_precision_score
 
 # Local module imports
 import entry_helpers as h
@@ -52,7 +51,7 @@ def load_data_matrices(config: dict) -> tuple[xgb.DMatrix, xgb.DMatrix]:
     val_x_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_X"])
     val_y_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
 
-    if config["target"]["custom_transform"]:
+    if config["target"]["custom_y"]:
         df_train_x = pd.read_csv(train_x_dir / "train.csv", header=None)
         df_val_x   = pd.read_csv(val_x_dir   / "eval.csv",  header=None)
         df_train_y = pd.read_csv(train_y_dir / "train_y.csv")
@@ -95,10 +94,10 @@ def main() -> None:
     # Load training and validation matrices
     training_matrix, validation_matrix = load_data_matrices(modeling_config)
 
-    # Define custom PR-AUC evaluation metric
-    def eval_aucpr(preds, dtrain):
-        labels = dtrain.get_label()
-        return 'eval_aucpr', average_precision_score(labels, preds)
+    # Load raw validation targets and pick custom eval function
+    val_y_dir = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
+    df_val_y_raw = pd.read_csv(val_y_dir / "eval_y.csv")
+    feval_fn = h.get_eval_function(modeling_config, df_val_y_raw)
 
     # Load booster params from CLI arguments
     args = h.load_hyperparams()
@@ -111,18 +110,10 @@ def main() -> None:
         num_boost_round=args.num_boost_round,
         evals=[(validation_matrix, "eval")],
         early_stopping_rounds=args.early_stopping_rounds,
-        feval=eval_aucpr,
+        feval=feval_fn,
         maximize=True,
         verbose_eval=1,
     )
-
-    # Compute PR-AUC on validation
-    y_val_predictions = booster.predict(validation_matrix)
-    y_val_actuals = validation_matrix.get_label()
-    pr_auc = average_precision_score(y_val_actuals, y_val_predictions)
-
-    # Emit metric for SageMaker’s regex parser.
-    print(f"validation:aucpr={pr_auc:.6f}")
 
     # Persist model artifacts to relative paths within the container
     model_output_dir = Path(os.environ.get("SM_MODEL_DIR", "/opt/ml/model"))

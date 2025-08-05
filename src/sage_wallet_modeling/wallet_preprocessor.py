@@ -262,7 +262,7 @@ class SageWalletsPreprocessor:
         - DataFrame: Preprocessed target data (continuous or binary based on model_type)
         """
         # Escape if we're preprocessing inside container later on
-        if self.modeling_config['target'].get('custom_y',False):
+        if self.modeling_config['target']['custom_y']:
             logger.info("Skipped preprocessing of y_full file.")
             return y_df
 
