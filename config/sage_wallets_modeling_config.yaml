@@ -9,8 +9,8 @@ metaparams:
     # instance_type: ml.c5.9xlarge
     # instance_type: ml.c6i.4xlarge
     instance_count: 1
-    batch_trans_instance_type: ml.c5.4xlarge
-    # batch_trans_instance_type: ml.m5.2xlarge
+    # batch_trans_instance_type: ml.c5.2xlarge
+    batch_trans_instance_type: ml.m5.2xlarge
     batch_trans_instance_count: 1
 
 script_mode:
@@ -22,9 +22,9 @@ script_mode:
 # KeyParam Target Var
 target:
     classification:
-        threshold: 0.6  # if target > {threshold}, class = 1
+        threshold: 0.60  # if target > {threshold}, class = 1
     custom_transform: True
-    target_var: crypto_net_gain/crypto_inflows/base
+    target_var: crypto_net_gain/crypto_inflows/rank
     custom_val:
         metric: cw_coin_return
         method: top_percentile # top_percentile of top_scores
@@ -34,6 +34,14 @@ target:
 training:
     model_type: classification  # regression or classification
     eval_metric: aucpr
+    custom_transform: True
+    custom_filters:
+        trading|total_volume|w1: [1000, 10e6]
+        macro|btc_mvrv_z_score_last|w1: [2.5, 10]
+        cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1: [2e6, 150e6]
+
+
+
 
     #KeyParam Hyperparameters
     hyperparameters:
@@ -41,7 +49,7 @@ training:
         # trees
         # num_round: 5
         num_round: 500
-        max_depth: 6
+        max_depth: 4
         min_child_weight: 10
         eta: 0.5
         early_stopping_rounds: 25
@@ -49,7 +57,7 @@ training:
         # sampling
         subsample: 0.8
         colsample_bytree: 0.8
-        scale_pos_weight: 1.1  # 1 to disable
+        scale_pos_weight: 1  # 1 to disable
 
         # feature selection
         alpha: 5   # 0 to disable
@@ -63,18 +71,18 @@ training:
         objective_type: maximize
         param_ranges:
         # Allowed values in the built in mode: [colsample_bytree, num_parallel_tree, max_depth, colsample_bynode, lambda, eta, alpha, num_round, colsample_bylevel, subsample, min_child_weight, max_delta_step, gamma]
-            max_depth:  [2, 6]
+            # max_depth:  [2, 6]
             # min_child_weight:  [5, 500]
             # eta:        [0.05, 0.2]
             # subsample: [0.6, 1.0]
             # colsample_bytree: [0.6, 1.0]
-            alpha:  [0, 10]
-            lambda: [1, 20]
-            gamma: [0, 5]
-            # scale_pos_weight: [1, 100]
-            # threshold: [0.05, 1.0]
+            # alpha:  [0, 10]
+            # lambda: [1, 20]
+            # gamma: [0, 5]
+            scale_pos_weight: [1, 100]
+            threshold: [0.55, 0.99]
         # max_jobs: 1
-        max_jobs: 30
+        max_jobs: 20
         max_parallel_jobs: 10
 
 predicting:
