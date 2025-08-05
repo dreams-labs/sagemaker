@@ -193,7 +193,7 @@ def create_concatenated_sagemaker_evaluator(
     test_df = pd.read_csv(data_path / "test.csv", header=None)
 
     y_train = train_df.iloc[:, 0]
-    if modeling_config['target']['custom_transform']:
+    if modeling_config['target']['custom_y']:
         # No y appended
         X_train = train_df
     else:
@@ -383,7 +383,7 @@ def load_concatenated_y(
     csv_path = data_path / f"{data_type}_y.csv"
 
     # Handle full y df from custom transform pipeline
-    if modeling_config['target']['custom_transform']:
+    if modeling_config['target']['custom_y']:
         full_y_df = pd.read_csv(csv_path)
         target_series = pd.Series(preprocess_custom_labels(full_y_df, modeling_config))
         target_df = pd.DataFrame(target_series)

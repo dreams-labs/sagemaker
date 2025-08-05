@@ -125,12 +125,12 @@ def _train_single_period_script_model(
     config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
 
     # Assemble channels and launch training
-    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
+    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_y'])
     # Mount config JSON as a channel
     channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
     launch_msg = (
         "Launching script-mode training job with custom targets"
-        if modeling_config['target']['custom_transform']
+        if modeling_config['target']['custom_y']
         else "Launching script-mode training job"
     )
     logger.info(f"{launch_msg}: {job_name}")
@@ -168,7 +168,8 @@ def _launch_hyperparameter_optimization(
     hpo_config = modeling_config['training']['hpo']
     max_jobs = hpo_config['max_jobs']
     max_parallel_jobs = hpo_config['max_parallel_jobs']
-    objective_metric_name = hpo_config['objective_metric_name']
+    eval_metric = modeling_config['training']['eval_metric']
+    objective_metric_name = f"validation:{eval_metric}"
     # Validate inputs using existing pattern
     if date_suffix not in s3_uris:
         raise ValueError(f"Date suffix {date_suffix} not found in s3_uris")
@@ -201,11 +202,11 @@ def _launch_hyperparameter_optimization(
         output_path=output_path
     )
 
-    # Configure HPO tuner
+    # dynamic metric definition based on eval_metric
     metric_definitions = [
         {
-            'Name': 'validation:aucpr',  # Use colon for HPO
-            'Regex': r'eval_aucpr:([0-9\.]+)'  # Extract from your print statement
+            'Name': objective_metric_name,  # Use colon for HPO
+            'Regex': rf'{eval_metric}:([0-9\.]+)'  # match our custom feval output
         }
     ]
 
@@ -225,7 +226,7 @@ def _launch_hyperparameter_optimization(
     # Upload config JSON for this HPO job
     config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
     # Assemble channels and launch HPO
-    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
+    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_y'])
     # Mount config JSON as part of HPO channels
     channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
     logger.info(f"Launching HPO job: {job_name}")
@@ -428,19 +429,19 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
     return ranges
 
 
-def _assemble_training_channels(date_uris: Dict[str, str], custom_transform: bool):
+def _assemble_training_channels(date_uris: Dict[str, str], custom_y: bool):
     """
-    Assemble SageMaker TrainingInput channels for X (and Y if custom_transform).
+    Assemble SageMaker TrainingInput channels for X (and Y if custom_y).
 
     Params:
     - date_uris: dict of channel names to S3 URIs (expects keys 'train', 'eval', and
-        if custom_transform: 'train_y', 'eval_y')
-    - custom_transform: whether to include label channels
+        if custom_y: 'train_y', 'eval_y')
+    - custom_y: whether to include label channels
 
     Returns:
     - dict: channel_name -> TrainingInput
     """
-    if custom_transform:
+    if custom_y:
         return {
             'train_x':      TrainingInput(s3_data=date_uris['train'],     content_type='text/csv'),
             'train_y':      TrainingInput(s3_data=date_uris['train_y'],   content_type='text/csv'),

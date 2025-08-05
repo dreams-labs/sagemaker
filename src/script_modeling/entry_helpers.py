@@ -4,6 +4,9 @@ from pathlib import Path
 import pandas as pd
 import xgboost as xgb
 
+import numpy as np
+from sklearn.metrics import average_precision_score
+
 
 HYPERPARAMETER_TYPES = {
     'num_boost_round': int,
@@ -116,3 +119,48 @@ def print_metrics_and_save(booster: xgb.Booster, scores: list, model_dir: Path) 
     print(f"mean_cv_auc_pr={mean_pr:.6f}")
     model_dir.mkdir(parents=True, exist_ok=True)
     booster.save_model(model_dir / "xgboost-model")
+
+
+# ---------------------------- Custom Evaluation Metrics ---------------------------- #
+
+def eval_aucpr(preds, dtrain):
+    """
+    XGBoost feval: computes PR-AUC between labels and predictions.
+    """
+    labels = dtrain.get_label()
+    return 'aucpr', average_precision_score(labels, preds)
+
+
+def eval_top_quantile(df_val_y_raw: pd.DataFrame, metric_col: str, top_pct: float):
+    """
+    Returns an XGBoost feval that computes the mean value of `metric_col`
+    over the top `top_pct` fraction of rows ranked by model score.
+    """
+    def eval_fn(preds, dtrain):  # pylint:disable=unused-argument
+        # rank predictions descending
+        idx_desc = np.argsort(preds)[::-1]
+        # ensure at least one row
+        n_top = max(int(len(preds) * top_pct), 1)
+        # average the raw target values for the top-scoring rows
+        raw_targets = df_val_y_raw[metric_col]
+        mean_val = raw_targets.iloc[idx_desc[:n_top]].mean()
+        return "top_quantile", float(mean_val)
+    return eval_fn
+
+
+# --------------------- Helper to select eval function by config --------------------- #
+
+def get_eval_function(config: dict, df_val_y_raw: pd.DataFrame):
+    """
+    Select and return the appropriate XGBoost feval based on modeling config.
+    """
+    method = config['training']['eval_metric']
+    custom_val = config['training'].get('custom_val', {})
+    metric_col = custom_val.get('metric')
+    if method == 'aucpr':
+        return eval_aucpr
+    elif method == 'top_quantile':
+        top_pct = custom_val['top_quantile']
+        return eval_top_quantile(df_val_y_raw, metric_col, top_pct)
+
+    return eval_aucpr

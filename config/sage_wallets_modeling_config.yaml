@@ -23,18 +23,18 @@ script_mode:
 target:
     classification:
         threshold: 0.60  # if target > {threshold}, class = 1
-    custom_transform: True
-    target_var: crypto_net_gain/crypto_inflows/rank
-    custom_val:
-        metric: cw_coin_return
-        method: top_percentile # top_percentile of top_scores
-        top_percentile: 0.05  # percent to apply validation
-        top_scores: 0.8  # scores above this are validated
+    custom_y: True
+    target_var: crypto_net_gain/crypto_inflows/base
 
 training:
     model_type: classification  # regression or classification
-    eval_metric: aucpr
-    custom_transform: True
+    # eval_metric: aucpr
+    eval_metric: top_quantile
+    custom_val:
+        metric: cw_coin_return # top_percentile of top_scores
+        top_quantile: 0.01  # percent to apply validation
+        top_scores: 0.8  # scores above this are validated
+    custom_x: True
     custom_filters:
         trading|total_volume|w1: [1000, 10e6]
         macro|btc_mvrv_z_score_last|w1: [2.5, 10]
@@ -66,7 +66,7 @@ training:
 
     # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization
-        # enabled: True
+        enabled: True
         objective_metric_name: validation:aucpr
         objective_type: maximize
         param_ranges:
@@ -80,7 +80,7 @@ training:
             # lambda: [1, 20]
             # gamma: [0, 5]
             scale_pos_weight: [1, 100]
-            threshold: [0.55, 0.99]
+            threshold: [0.1, 0.9]
         # max_jobs: 1
         max_jobs: 20
         max_parallel_jobs: 10

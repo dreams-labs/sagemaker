@@ -108,7 +108,7 @@ class SageWalletsPreprocessor:
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
                 # don't add y to X if we're going to customize it in the container
-                if not self.modeling_config['target']['custom_transform']:
+                if not self.modeling_config['target']['custom_y']:
                     # Train and Eval sets need the target var appended as first column
                     combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
                     processed_data[split_name] = combined_data
@@ -262,7 +262,7 @@ class SageWalletsPreprocessor:
         - DataFrame: Preprocessed target data (continuous or binary based on model_type)
         """
         # Escape if we're preprocessing inside container later on
-        if self.modeling_config['target'].get('custom_transform',False):
+        if self.modeling_config['target']['custom_y']:
             logger.info("Skipped preprocessing of y_full file.")
             return y_df
 
