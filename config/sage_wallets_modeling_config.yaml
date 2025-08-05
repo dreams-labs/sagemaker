@@ -22,7 +22,7 @@ script_mode:
 # KeyParam Target Var
 target:
     classification:
-        threshold: 0.60  # if target > {threshold}, class = 1
+        threshold: 0.30  # if target > {threshold}, class = 1
     custom_y: True
     target_var: crypto_net_gain/crypto_inflows/base
 
@@ -57,7 +57,7 @@ training:
         # sampling
         subsample: 0.8
         colsample_bytree: 0.8
-        scale_pos_weight: 1  # 1 to disable
+        scale_pos_weight: 3  # 1 to disable
 
         # feature selection
         alpha: 5   # 0 to disable
@@ -66,7 +66,7 @@ training:
 
     # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization
-        enabled: True
+        # enabled: True
         objective_metric_name: validation:aucpr
         objective_type: maximize
         param_ranges:
