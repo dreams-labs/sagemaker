@@ -16,6 +16,7 @@ HYPERPARAMETER_TYPES = {
     'scale_pos_weight': float,
     'alpha': float,           # L1 regularization
     'lambda': float,          # L2 regularization
+    'gamma': float,
     'threshold': float
 }
 
