@@ -28,8 +28,8 @@ target:
 
 training:
     model_type: classification  # regression or classification
-    # eval_metric: aucpr
-    eval_metric: top_quantile
+    eval_metric: aucpr
+    # eval_metric: top_quantile
     custom_val:
         metric: cw_coin_return # top_percentile of top_scores
         top_quantile: 0.01  # percent to apply validation
@@ -74,15 +74,15 @@ training:
             # max_depth:  [2, 6]
             # min_child_weight:  [5, 500]
             # eta:        [0.05, 0.2]
-            # subsample: [0.6, 1.0]
-            # colsample_bytree: [0.6, 1.0]
-            # alpha:  [0, 10]
-            # lambda: [1, 20]
-            # gamma: [0, 5]
+            subsample: [0.6, 1.0]
+            colsample_bytree: [0.6, 1.0]
+            alpha:  [0, 10]
+            lambda: [1, 20]
+            gamma: [0, 5]
             scale_pos_weight: [1, 100]
-            threshold: [0.1, 0.9]
+            # threshold: [0.1, 0.9]
         # max_jobs: 1
-        max_jobs: 20
+        max_jobs: 50
         max_parallel_jobs: 10
 
 predicting:
