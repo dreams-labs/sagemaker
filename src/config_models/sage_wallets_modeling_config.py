@@ -94,6 +94,8 @@ class TrainingConfig(NoExtrasBaseModel):
     )
     eval_metric: str = Field(...)
     hyperparameters: dict = Field(...)
+    custom_transform: bool = Field(...)
+    custom_filters: dict = Field(...)
     hpo: dict = Field(...)
 
 
