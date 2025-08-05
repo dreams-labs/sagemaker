@@ -5,7 +5,7 @@ Thin wrapper to launch SageMaker script-mode XGBoost training.
 import logging
 from datetime import datetime
 from typing import Dict, Union
-
+import json
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
 from sagemaker.sklearn import SKLearn
@@ -121,10 +121,18 @@ def _train_single_period_script_model(
 
     # Assemble job name
     job_name = _build_job_name("wscr", upload_dir, date_suffix)
+    # Upload config JSON for this run
+    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
 
     # Assemble channels and launch training
     channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
-    launch_msg = "Launching script-mode training job with custom targets" if modeling_config['target']['custom_transform'] else "Launching script-mode training job"
+    # Mount config JSON as a channel
+    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
+    launch_msg = (
+        "Launching script-mode training job with custom targets"
+        if modeling_config['target']['custom_transform']
+        else "Launching script-mode training job"
+    )
     logger.info(f"{launch_msg}: {job_name}")
     estimator.fit(channels, job_name=job_name, wait=True)
 
@@ -214,8 +222,12 @@ def _launch_hyperparameter_optimization(
 
     # Build job name and prepare inputs
     job_name = _build_job_name("whpo", upload_dir, date_suffix)
+    # Upload config JSON for this HPO job
+    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
     # Assemble channels and launch HPO
     channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
+    # Mount config JSON as part of HPO channels
+    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
     logger.info(f"Launching HPO job: {job_name}")
     ambient_player = u.AmbientPlayer()
     ambient_player.start('spaceship_ambient_loop')
@@ -336,16 +348,6 @@ def _prepare_hyperparameters(
         # Both present - remove num_round, keep num_boost_round
         hp.pop('num_round')
 
-    # Add custom transformation params
-    if modeling_config['target']['custom_transform']:
-        hp['custom_transform']   = modeling_config['target']['custom_transform']
-        hp['target_thresh']      = modeling_config['target']['classification']['threshold']
-        hp['target_var']         = modeling_config['target']['target_var']
-        hp['val_metric']         = modeling_config['target']['custom_val']['metric']
-        hp['val_method']         = modeling_config['target']['custom_val']['method']
-        hp['val_top_percentile'] = modeling_config['target']['custom_val']['top_percentile']
-        hp['val_top_scores']     = modeling_config['target']['custom_val']['top_scores']
-
     return hp
 
 
@@ -398,20 +400,23 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
 
         # Get the type from centralized source
         if param_name not in HYPERPARAMETER_TYPES:
-            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must be defined in HYPERPARAMETER_TYPES.")
+            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must "
+                              f"be defined in HYPERPARAMETER_TYPES.")
 
         param_type = HYPERPARAMETER_TYPES[param_name]
 
         # Convert Python type to SageMaker parameter object
         if param_type == int:
             if len(range_values) != 2:
-                raise ConfigError(f"Integer parameter '{param_name}' must be [min, max], got {range_values}")
+                raise ConfigError(f"Integer parameter '{param_name}' must "
+                                  f"be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = IntegerParameter(min_val, max_val)
 
         elif param_type == float:
             if len(range_values) != 2:
-                raise ConfigError(f"Float parameter '{param_name}' must be [min, max], got {range_values}")
+                raise ConfigError(f"Float parameter '{param_name}' must "
+                                  f"be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = ContinuousParameter(min_val, max_val)
 
@@ -447,3 +452,16 @@ def _assemble_training_channels(date_uris: Dict[str, str], custom_transform: boo
             'train':      TrainingInput(s3_data=date_uris['train'], content_type='text/csv'),
             'validation': TrainingInput(s3_data=date_uris['eval'],   content_type='text/csv'),
         }
+
+
+def _upload_config_to_s3(
+    config_dict: Dict,
+    bucket: str,
+    upload_dir: str,
+    job_name: str
+) -> str:
+    """Upload modeling_config JSON to S3 and return its S3 URI."""
+    s3_client = boto3.client('s3')
+    key = f"{upload_dir}/config/{job_name}/modeling_config.json"
+    s3_client.put_object(Bucket=bucket, Key=key, Body=json.dumps(config_dict))
+    return f"s3://{bucket}/{key}"

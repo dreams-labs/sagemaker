@@ -2,7 +2,6 @@ import sys
 import argparse
 from pathlib import Path
 import pandas as pd
-import numpy as np
 import xgboost as xgb
 
 
@@ -16,17 +15,7 @@ HYPERPARAMETER_TYPES = {
     'subsample': float,
     'scale_pos_weight': float,
     'alpha': float,           # L1 regularization
-    'lambda': float,          # L2 regularization
-    'target_var': str,
-    'classification_threshold': float,
-    'model_type': str,
-    # Extended hyperparameters for custom transform and validation
-    'custom_transform': bool,
-    'target_thresh': float,
-    'val_metric': str,
-    'val_method': str,
-    'val_top_percentile': float,
-    'val_top_scores': float
+    'lambda': float           # L2 regularization
 }
 
 def load_hyperparams() -> argparse.Namespace:
@@ -87,21 +76,6 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
     labels = df.iloc[:, 0].values
     features = df.iloc[:, 1:].values
     return xgb.DMatrix(features, label=labels)
-
-
-def preprocess_target_column(df: pd.DataFrame, args: argparse.Namespace) -> np.ndarray:
-    """Extract and preprocess target column from y_full data."""
-    # Select target column
-    target_series = df[args.target_var]
-
-    # Apply preprocessing based on model type
-    if args.model_type == 'classification':
-        # Apply threshold to convert continuous → binary
-        processed_target = (target_series > args.classification_threshold).astype(int)
-    else:  # regression
-        processed_target = target_series.astype(float)
-
-    return processed_target.values
 
 
 def build_booster_params(args: argparse.Namespace) -> dict:
