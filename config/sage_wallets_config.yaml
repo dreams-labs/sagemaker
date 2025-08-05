@@ -2,9 +2,15 @@
 
 training_data: #SageMaker
     local_s3_root: ../  # where s3_uploads and s3_downloads exist
-    training_data_directory: dda_897_td_column_ordering_v1  # where to load local csvs from
-    local_directory: dda_920_eval_models_nginv_040  # where to store local artifacts
-    upload_directory: dda-920-nginv-040  # new S3 folder name in bucket training_data_processed
+    training_data_directory: dda_940_export_targets  # where to load local csvs from
+    # local_directory: dda_930_concat_model  # where to store local artifacts
+    # upload_directory: dda-930-vt-perf  # new S3 folder name in bucket training_data_processed
+
+    local_directory: dda_940_export_targets  # where to store local artifacts
+    upload_directory: dda-940-exp-tars  # new S3 folder name in bucket training_data_processed
+    # local_directory: dda_940_export_targets_base  # where to store local artifacts
+    # upload_directory: dda-940-exp-tars-b  # new S3 folder name in bucket training_data_processed
+
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
@@ -105,7 +111,10 @@ workflow:
 
 aws: #SageMaker
     training_bucket: wallet-training-data
+    script_model_bucket: wallet-script-models
     preprocessed_directory: training-data-preprocessed
+    concatenated_directory: training-data-concatenated
+    temporal_cv_directory: training-data-temporal-cvs
     modeler_arn: arn:aws:iam::891377123484:role/sagemaker_runner
 
 n_threads: #SageMaker
