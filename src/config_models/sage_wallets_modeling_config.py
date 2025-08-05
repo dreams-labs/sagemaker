@@ -85,6 +85,15 @@ class ModelType(str, Enum):
     REGRESSION = "regression"
     CLASSIFICATION = "classification"
 
+# Insert CustomValConfig before TargetConfig for readability and model building
+class CustomValConfig(NoExtrasBaseModel):
+    """
+    Configuration for custom validation strategy.
+    """
+    metric: str = Field(..., description="Metric used to evaluate predictions during custom validation")
+    top_quantile: float = Field(..., description="Percentage of samples to apply custom validation to")
+    top_scores: float = Field(..., description="Minimum model score to consider for custom validation")
+
 class TrainingConfig(NoExtrasBaseModel):
     """
     Configuration for training settings.
@@ -94,7 +103,10 @@ class TrainingConfig(NoExtrasBaseModel):
     )
     eval_metric: str = Field(...)
     hyperparameters: dict = Field(...)
-    custom_transform: bool = Field(...)
+    custom_val: CustomValConfig = Field(
+        ..., description="Custom validation configuration"
+    )
+    custom_x: bool = Field(...)
     custom_filters: dict = Field(...)
     hpo: dict = Field(...)
 
@@ -119,17 +131,6 @@ class ClassificationConfig(NoExtrasBaseModel):
     )
 
 
-# Insert CustomValConfig before TargetConfig for readability and model building
-class CustomValConfig(NoExtrasBaseModel):
-    """
-    Configuration for custom validation strategy.
-    """
-    metric: str = Field(..., description="Metric used to evaluate predictions during custom validation")
-    method: str = Field(..., description="Method used to select samples for custom validation")
-    top_percentile: float = Field(..., description="Percentage of samples to apply custom validation to")
-    top_scores: float = Field(..., description="Minimum model score to consider for custom validation")
-
-
 class TargetConfig(NoExtrasBaseModel):
     """
     Configuration for target settings.
@@ -137,14 +138,11 @@ class TargetConfig(NoExtrasBaseModel):
     classification: ClassificationConfig = Field(
         ..., description="Classification target settings"
     )
-    custom_transform: bool = Field(
+    custom_y: bool = Field(
         ..., description="Whether to apply custom transformation logic to the target"
     )
     target_var: str = Field(
         ..., description="Target variable used for training"
-    )
-    custom_val: CustomValConfig = Field(
-        ..., description="Custom validation configuration"
     )
 
 

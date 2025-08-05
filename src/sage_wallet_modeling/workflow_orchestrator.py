@@ -268,7 +268,7 @@ class WalletWorkflowOrchestrator:
         for date_suffix in self.date_suffixes:
             raw_data_by_date[date_suffix] = self._load_single_date_data(date_suffix)
 
-        if self.modeling_config['target']['custom_transform']:
+        if self.modeling_config['target']['custom_y']:
             # Concatenate full y files for all splits
             y_splits_to_export = ['train', 'eval', 'test', 'val']
             include_header = True
@@ -325,7 +325,7 @@ class WalletWorkflowOrchestrator:
             splits = ['train', 'eval', 'test', 'val']
 
         # Append upload_y if we need it for custom transform
-        if self.modeling_config['target']['custom_transform']:
+        if self.modeling_config['target']['custom_y']:
             y_splits = [f"{split}_y" for split in splits]
             splits = splits + y_splits
 
@@ -768,7 +768,7 @@ class WalletWorkflowOrchestrator:
                 'eval':  upload_results['eval']
             }
         }
-        if self.modeling_config['target']['custom_transform']:
+        if self.modeling_config['target']['custom_y']:
             s3_uris[synthetic_suffix]['train_y'] = upload_results['train_y']
             s3_uris[synthetic_suffix]['eval_y'] = upload_results['eval_y']
 
@@ -1020,7 +1020,7 @@ class WalletWorkflowOrchestrator:
                 # Build filename pattern
                 if (
                     data_type == 'y' and
-                    self.modeling_config.get('target', {}).get('custom_transform', False)
+                    self.modeling_config.get('target', {}).get('custom_y', False)
                 ):
                     # Handle full y loading
                     pattern = f"y_{split}_full_{date_suffix}.parquet"
