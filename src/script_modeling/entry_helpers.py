@@ -1,3 +1,4 @@
+import sys
 import argparse
 from pathlib import Path
 import pandas as pd
@@ -15,6 +16,7 @@ HYPERPARAMETER_TYPES = {
     'scale_pos_weight': float,
     'alpha': float,           # L1 regularization
     'lambda': float,          # L2 regularization
+    'threshold': float
 }
 
 def load_hyperparams() -> argparse.Namespace:
@@ -37,16 +39,23 @@ def load_hyperparams() -> argparse.Namespace:
     ```
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eta", type=float, default=0.1)
-    parser.add_argument("--max_depth", type=int, default=6)
-    parser.add_argument("--min_child_weight", type=int, default=6)
-    parser.add_argument("--num_boost_round", type=int, default=500)
-    parser.add_argument("--subsample", type=float, default=1.0)
-    parser.add_argument("--early_stopping_rounds", type=int, default=30)
-    parser.add_argument("--colsample_bytree", type=float, default=0.9)
-    parser.add_argument("--scale_pos_weight", type=float, default=0.9)
-    parser.add_argument("--alpha", type=float, default=0.9)
-    parser.add_argument("--lambda", type=float, default=0.9)
+
+    # Detect which params were passed in CLI
+    cli_args = set()
+    for arg in sys.argv[1:]:
+        if arg.startswith('--'):
+            name = arg.split('=')[0].lstrip('-')
+            cli_args.add(name)
+
+    # Add arguments only for hyperparameters present in CLI and known types
+    for name, typ in HYPERPARAMETER_TYPES.items():
+        if name in cli_args:
+            # Special-case bools for CLI parsing
+            if typ is bool:
+                parser.add_argument(f"--{name}", type=lambda x: x.lower() == 'true', required=True)
+            else:
+                parser.add_argument(f"--{name}", type=typ, required=True)
+
     return parser.parse_args()
 
 

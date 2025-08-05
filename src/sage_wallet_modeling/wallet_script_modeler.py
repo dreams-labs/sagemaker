@@ -5,7 +5,7 @@ Thin wrapper to launch SageMaker script-mode XGBoost training.
 import logging
 from datetime import datetime
 from typing import Dict, Union
-
+import json
 from sagemaker.inputs import TrainingInput
 from sagemaker.xgboost import XGBoost
 from sagemaker.sklearn import SKLearn
@@ -19,8 +19,8 @@ from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
 import utils as u
 from utils import ConfigError
 
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------
@@ -94,12 +94,6 @@ def _train_single_period_script_model(
         raise ValueError(f"Date suffix {date_suffix} not found in s3_uris")
     date_uris = s3_uris[date_suffix]
 
-    # Extract URIs for train and eval channels
-    train_uri = date_uris['train']
-    eval_uri = date_uris['eval']
-    if not eval_uri:
-        raise ValueError(f"'eval' data URI missing for date_suffix {date_suffix}")
-
     # Read script_mode configuration
     script_cfg = modeling_config['script_mode']
     entry_point = script_cfg['entry_point']
@@ -111,7 +105,7 @@ def _train_single_period_script_model(
     output_path = f"s3://{bucket}/model-outputs/{upload_dir}/{date_suffix}"
 
     # Prepare hyperparameters for script-mode
-    hp = _prepare_hyperparameters(modeling_config['training']['hyperparameters'])
+    hp = _prepare_hyperparameters(modeling_config)
 
     # Instantiate the XGBoost ScriptMode estimator
     estimator = XGBoost(
@@ -127,17 +121,20 @@ def _train_single_period_script_model(
 
     # Assemble job name
     job_name = _build_job_name("wscr", upload_dir, date_suffix)
+    # Upload config JSON for this run
+    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
 
-    # Prepare TrainingInput channels
-    train_input = TrainingInput(s3_data=train_uri, content_type='text/csv')
-    validation_input = TrainingInput(s3_data=eval_uri, content_type='text/csv')
-
-    logger.info(f"Launching script-mode training job: {job_name}")
-    estimator.fit(
-        {"train": train_input, "validation": validation_input},
-        job_name=job_name,
-        wait=True
+    # Assemble channels and launch training
+    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
+    # Mount config JSON as a channel
+    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
+    launch_msg = (
+        "Launching script-mode training job with custom targets"
+        if modeling_config['target']['custom_transform']
+        else "Launching script-mode training job"
     )
+    logger.info(f"{launch_msg}: {job_name}")
+    estimator.fit(channels, job_name=job_name, wait=True)
 
     model_uri = estimator.model_data
     logger.info(f"Script-mode training completed. Model URI: {model_uri}")
@@ -176,11 +173,6 @@ def _launch_hyperparameter_optimization(
     if date_suffix not in s3_uris:
         raise ValueError(f"Date suffix {date_suffix} not found in s3_uris")
     date_uris = s3_uris[date_suffix]
-
-    train_uri = date_uris['train']
-    eval_uri = date_uris['eval']
-    if not eval_uri:
-        raise ValueError(f"'eval' data URI missing for date_suffix {date_suffix}")
 
     # Create base estimator using existing logic
     script_cfg = modeling_config['script_mode']
@@ -230,23 +222,19 @@ def _launch_hyperparameter_optimization(
 
     # Build job name and prepare inputs
     job_name = _build_job_name("whpo", upload_dir, date_suffix)
-    train_input = TrainingInput(s3_data=train_uri, content_type='text/csv')
-    validation_input = TrainingInput(s3_data=eval_uri, content_type='text/csv')
-
+    # Upload config JSON for this HPO job
+    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
+    # Assemble channels and launch HPO
+    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_transform'])
+    # Mount config JSON as part of HPO channels
+    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
     logger.info(f"Launching HPO job: {job_name}")
-    logger.info(f"Max jobs: {max_jobs}, Max parallel: {max_parallel_jobs}")
-    logger.info(f"Optimizing: {objective_metric_name}")
     ambient_player = u.AmbientPlayer()
-    ambient_player.start('ship_power_room_loop')
-
-    # Launch HPO
+    ambient_player.start('spaceship_ambient_loop')
     try:
-        tuner.fit(
-            {"train": train_input, "validation": validation_input},
-            job_name=job_name,
-            wait=True
-        )
+        tuner.fit(channels, job_name=job_name, wait=True)
     except UnexpectedStatusException as e:
+        ambient_player.stop()
         logger.error("Hyperparameter tuning job %s failed: %s", job_name, str(e))
         sm_client = boto3.client('sagemaker')
         jobs = sm_client.list_training_jobs_for_hyper_parameter_tuning_job(
@@ -291,7 +279,8 @@ def train_temporal_cv_script_model(
     Params:
     - wallets_config (dict): Validated sage_wallets_config.yaml as a dict.
     - modeling_config (dict): Validated sage_wallets_modeling_config.yaml as a dict.
-    - cv_s3_uri (str): S3 URI of the root CV directory (contains fold_{suffix}/train.csv and /validation.csv).
+    - cv_s3_uri (str): S3 URI of the root CV directory (contains fold_{suffix}/train.csv
+        and /validation.csv).
 
     Returns:
     - dict: {
@@ -299,11 +288,6 @@ def train_temporal_cv_script_model(
         'training_job_name': str      # Name of the SageMaker training job
       }
     """
-    # Read script_mode configuration
-    script_cfg = modeling_config['script_mode']
-    entry_point = script_cfg['entry_point']
-    source_dir = script_cfg['source_dir']
-
     # Prepare hyperparameters for script-mode
     hp = _prepare_hyperparameters(modeling_config['training']['hyperparameters'])
 
@@ -315,14 +299,14 @@ def train_temporal_cv_script_model(
 
     # Instantiate the XGBoost ScriptMode estimator
     estimator = XGBoost(
-        entry_point=entry_point,
-        source_dir=source_dir,
-        framework_version=modeling_config['framework']['version'],
-        instance_type=modeling_config['metaparams']['instance_type'],
-        instance_count=modeling_config['metaparams']['instance_count'],
-        role=wallets_config['aws']['modeler_arn'],
-        hyperparameters=hp,
-        output_path=output_path
+        entry_point =       modeling_config['script_mode']['entry_point'],
+        source_dir =        modeling_config['script_mode']['source_dir'],
+        framework_version = modeling_config['framework']['version'],
+        instance_type =     modeling_config['metaparams']['instance_type'],
+        instance_count =    modeling_config['metaparams']['instance_count'],
+        role =              wallets_config['aws']['modeler_arn'],
+        hyperparameters =   hp,
+        output_path =       output_path
     )
 
     # Prepare CV channel input
@@ -343,13 +327,19 @@ def train_temporal_cv_script_model(
 # ---------------------------------------------------------------------------
 #   Shared helper functions for script-mode XGBoost training
 # ---------------------------------------------------------------------------
-def _prepare_hyperparameters(raw_hp: Dict[str, Union[int, float]]) -> Dict[str, Union[int, float]]:
+def _prepare_hyperparameters(
+        modeling_config: Dict[str, Union[int, float]]
+    ) -> Dict[str, Union[int, float]]:
     """
     Remap num_round to num_boost_round for script-mode compatibility. Why?
      * Built-in container: Uses num_round
      * Script-mode: Uses num_boost_round
+
+    Params:
+        - modeling_config (dict): Validated sage_wallets_modeling_config.yaml as a dict.
     """
-    hp = raw_hp.copy()
+    # Copy base hyperparams
+    hp = modeling_config['training']['hyperparameters'].copy()
 
     # Handle built-in vs script-mode naming difference
     if 'num_round' in hp and 'num_boost_round' not in hp:
@@ -410,20 +400,23 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
 
         # Get the type from centralized source
         if param_name not in HYPERPARAMETER_TYPES:
-            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must be defined in HYPERPARAMETER_TYPES.")
+            raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must "
+                              f"be defined in HYPERPARAMETER_TYPES.")
 
         param_type = HYPERPARAMETER_TYPES[param_name]
 
         # Convert Python type to SageMaker parameter object
         if param_type == int:
             if len(range_values) != 2:
-                raise ConfigError(f"Integer parameter '{param_name}' must be [min, max], got {range_values}")
+                raise ConfigError(f"Integer parameter '{param_name}' must "
+                                  f"be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = IntegerParameter(min_val, max_val)
 
         elif param_type == float:
             if len(range_values) != 2:
-                raise ConfigError(f"Float parameter '{param_name}' must be [min, max], got {range_values}")
+                raise ConfigError(f"Float parameter '{param_name}' must "
+                                  f"be [min, max], got {range_values}")
             min_val, max_val = range_values
             ranges[param_name] = ContinuousParameter(min_val, max_val)
 
@@ -433,3 +426,42 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
 
     logger.info(f"HPO will tune: {list(ranges.keys())}")
     return ranges
+
+
+def _assemble_training_channels(date_uris: Dict[str, str], custom_transform: bool):
+    """
+    Assemble SageMaker TrainingInput channels for X (and Y if custom_transform).
+
+    Params:
+    - date_uris: dict of channel names to S3 URIs (expects keys 'train', 'eval', and
+        if custom_transform: 'train_y', 'eval_y')
+    - custom_transform: whether to include label channels
+
+    Returns:
+    - dict: channel_name -> TrainingInput
+    """
+    if custom_transform:
+        return {
+            'train_x':      TrainingInput(s3_data=date_uris['train'],     content_type='text/csv'),
+            'train_y':      TrainingInput(s3_data=date_uris['train_y'],   content_type='text/csv'),
+            'validation_x': TrainingInput(s3_data=date_uris['eval'],      content_type='text/csv'),
+            'validation_y': TrainingInput(s3_data=date_uris['eval_y'],    content_type='text/csv'),
+        }
+    else:
+        return {
+            'train':      TrainingInput(s3_data=date_uris['train'], content_type='text/csv'),
+            'validation': TrainingInput(s3_data=date_uris['eval'],   content_type='text/csv'),
+        }
+
+
+def _upload_config_to_s3(
+    config_dict: Dict,
+    bucket: str,
+    upload_dir: str,
+    job_name: str
+) -> str:
+    """Upload modeling_config JSON to S3 and return its S3 URI."""
+    s3_client = boto3.client('s3')
+    key = f"{upload_dir}/config/{job_name}/modeling_config.json"
+    s3_client.put_object(Bucket=bucket, Key=key, Body=json.dumps(config_dict))
+    return f"s3://{bucket}/{key}"

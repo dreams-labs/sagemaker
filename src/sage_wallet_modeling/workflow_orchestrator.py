@@ -4,6 +4,7 @@ model training coordination, and results handling.
 """
 import logging
 import tempfile
+from typing import List
 import os
 from pathlib import Path
 from dataclasses import dataclass
@@ -202,6 +203,7 @@ class WalletWorkflowOrchestrator:
         return preprocessed_by_date
 
 
+    @u.timing_decorator
     def concatenate_all_preprocessed_data(self) -> None:
         """
         Concatenate preprocessed CSVs across configured offsets for each split and
@@ -266,8 +268,14 @@ class WalletWorkflowOrchestrator:
         for date_suffix in self.date_suffixes:
             raw_data_by_date[date_suffix] = self._load_single_date_data(date_suffix)
 
-        # Concatenate RAW y-files for test and val splits only
-        y_splits_to_export = ['test', 'val']
+        if self.modeling_config['target']['custom_transform']:
+            # Concatenate full y files for all splits
+            y_splits_to_export = ['train', 'eval', 'test', 'val']
+            include_header = True
+        else:
+            # Concatenate y-files for test and val splits only
+            y_splits_to_export = ['test', 'val']
+            include_header = False
         for split in y_splits_to_export:
             split_offsets = offsets_map.get(split, [])
             if not split_offsets:
@@ -293,26 +301,33 @@ class WalletWorkflowOrchestrator:
 
             concatenated_y = pd.concat(y_dfs, ignore_index=True)
             y_out_file = concat_base / f"{split}_y.csv"
-            concatenated_y.to_csv(y_out_file, index=False, header=False)
+            concatenated_y.to_csv(y_out_file, index=False, header=include_header)
             logger.info(f"Saved concatenated {split}_y.csv with {len(concatenated_y)} "
                         f"rows to {y_out_file}")
+
 
     @u.timing_decorator
     def upload_concatenated_training_data(
             self,
             overwrite_existing: bool = False,
-            splits = None
+            splits: List = None
         ) -> dict[str, str]:
         """
         Upload concatenated training data splits to S3, organized under a single folder.
         Params:
         - overwrite_existing (bool): If True, overwrites existing S3 objects.
+        - splits (list): which splits to upload
         Returns:
         - dict: Mapping of split_name to S3 URI for uploaded concatenated data.
         """
         # Assign to unique list
         if splits is None:
             splits = ['train', 'eval', 'test', 'val']
+
+        # Append upload_y if we need it for custom transform
+        if self.modeling_config['target']['custom_transform']:
+            y_splits = [f"{split}_y" for split in splits]
+            splits = splits + y_splits
 
         # Determine S3 target paths
         bucket = self.wallets_config['aws']['training_bucket']
@@ -745,7 +760,7 @@ class WalletWorkflowOrchestrator:
         # Use all offsets that have preprocessed CSVs available
         self.date_suffixes = list(dict.fromkeys(train_offsets + eval_offsets + test_offsets))
 
-        # 3) Prepare s3_uris dict keyed by our special suffix
+        # Prepare s3_uris dict keyed by our special suffix
         synthetic_suffix = 'concat'
         s3_uris = {
             synthetic_suffix: {
@@ -753,6 +768,9 @@ class WalletWorkflowOrchestrator:
                 'eval':  upload_results['eval']
             }
         }
+        if self.modeling_config['target']['custom_transform']:
+            s3_uris[synthetic_suffix]['train_y'] = upload_results['train_y']
+            s3_uris[synthetic_suffix]['eval_y'] = upload_results['eval_y']
 
         # Launch training via WalletModeler
         modeler = WalletModeler(
@@ -1000,7 +1018,16 @@ class WalletWorkflowOrchestrator:
         for data_type in data_types:
             for split in splits:
                 # Build filename pattern
-                pattern = f"{data_type}_{split}*{date_suffix}.parquet"
+                if (
+                    data_type == 'y' and
+                    self.modeling_config.get('target', {}).get('custom_transform', False)
+                ):
+                    # Handle full y loading
+                    pattern = f"y_{split}_full_{date_suffix}.parquet"
+                else:
+                    # X loading and base y loading
+                    pattern = f"{data_type}_{split}_{date_suffix}.parquet"
+
                 matching_files = list(self.data_folder.glob(pattern))
 
                 if not matching_files:

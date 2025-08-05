@@ -21,7 +21,14 @@ script_mode:
 # KeyParam Target Var
 target:
     classification:
-        threshold: 0.25  # if target > {threshold}, class = 1
+        threshold: 0.40  # if target > {threshold}, class = 1
+    custom_transform: True
+    target_var: crypto_net_gain/crypto_inflows/base
+    custom_val:
+        metric: cw_coin_return
+        method: top_percentile # top_percentile of top_scores
+        top_percentile: 0.05  # percent to apply validation
+        top_scores: 0.8  # scores above this are validated
 
 training:
     model_type: classification  # regression or classification
@@ -31,8 +38,8 @@ training:
     hyperparameters:
 
         # trees
-        num_round: 300
-        max_depth: 7
+        num_round: 500
+        max_depth: 3
         min_child_weight: 13
         eta: 0.5
         early_stopping_rounds: 25
@@ -60,6 +67,7 @@ training:
             # colsample_bytree: [0.6, 1.0]
             # alpha:  [0, 10]
             # lambda: [1, 20]  # needs 'reg_' to escape reserved keyword
+            # gamma: [0, 5]
             scale_pos_weight: [1, 100]
         max_jobs: 40
         max_parallel_jobs: 10
