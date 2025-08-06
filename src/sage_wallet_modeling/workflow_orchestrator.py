@@ -416,6 +416,31 @@ class WalletWorkflowOrchestrator:
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
             executor.map(_upload_split, splits)
 
+        # Add this after the main CSV upload loop, before the return statement
+        logger.info("Uploading concatenated metadata...")
+
+        # Upload metadata.json
+        metadata_file = concat_dir / "metadata.json"
+        if metadata_file.exists():
+            s3_key = f"{base_folder}/{folder_prefix}metadata.json"
+            s3_uri = f"s3://{bucket}/{s3_key}"
+
+            # Check if exists (following same pattern as splits)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=s3_key)
+                if not overwrite_existing:
+                    logger.info(f"Metadata exists, skipping upload: {s3_key}")
+                else:
+                    logger.info(f"Overwriting existing metadata: {s3_uri}")
+                    s3_client.upload_file(str(metadata_file), bucket, s3_key)
+            except ClientError:
+                logger.info(f"Uploading metadata to {s3_uri}")
+                s3_client.upload_file(str(metadata_file), bucket, s3_key)
+
+            upload_results['metadata'] = s3_uri
+        else:
+            logger.warning("No metadata.json found in concatenated directory")
+
         return upload_results
 
 
