@@ -36,13 +36,13 @@ training:
         top_scores: 0.8  # scores above this are validated
     custom_x: True
     custom_filters:
-        cw_trading|crypto_inflows|w1:
-            cli: cw_inflows
-            min: 500
+        # cw_trading|crypto_inflows|w1:
+        #     cli: cw_inflows
+        #     min: 500
         #     max: 10000000
         # macro|btc_mvrv_z_score_last|w1:
         #     cli: btc_mvrv
-        #     min: 2.5
+            # min: 1.5
         #     max: 10
         cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
             cli: cw_mktcap
@@ -50,6 +50,8 @@ training:
             max: 4000000000  # 4 billion
         # trading|crypto_inflows|all_windows:
         # trading|unique_coins_traded|all_windows:
+        # macro|btc_vdd_multiple_last|w1:
+
 
 
 
@@ -77,7 +79,7 @@ training:
 
     # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization
-        enabled: True
+        # enabled: True
         objective_metric_name: validation:aucpr
         objective_type: maximize
         param_ranges:
@@ -93,6 +95,7 @@ training:
             # scale_pos_weight: [1, 100]
             # threshold: [0.1, 0.9]
             filter_cw_inflows_min: [0,50000]
+            # filter_btc_mvrv_min: [-1,3]
             # filter_cw_mktcap_min: [0,50000000]
             # filter_cw_mktcap_max: [50000000,5000000000]
         # max_jobs: 1
