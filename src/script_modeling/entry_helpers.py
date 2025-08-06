@@ -7,8 +7,11 @@ import xgboost as xgb
 import numpy as np
 from sklearn.metrics import average_precision_score
 
-
+# ---------------------------------
+#     List of Valid Hyperparams
+# ---------------------------------
 HYPERPARAMETER_TYPES = {
+    # baseline xgb
     'num_boost_round': int,
     'max_depth': int,
     'min_child_weight': int,
@@ -20,9 +23,33 @@ HYPERPARAMETER_TYPES = {
     'alpha': float,           # L1 regularization
     'lambda': float,          # L2 regularization
     'gamma': float,
-    'threshold': float
+
+    # y custom transform
+    'threshold': float,
+
+    # X custom transform
+    # filter_{cli_name}_min: defined via register_filter_hyperparameters
+    # filter_{cli_name}_max: defined via register_filter_hyperparameters
 }
 
+def register_filter_hyperparameters(modeling_config: dict) -> None:
+    """
+    Dynamically add the filter hyperparams defined in training.custom_filters
+     to HYPERPARAMETER_TYPES.
+    """
+    custom_filters = modeling_config.get('training', {}).get('custom_filters', {})
+
+    for filter_config in custom_filters.values():
+        cli_name = filter_config.get('cli')
+        if cli_name:
+            HYPERPARAMETER_TYPES[f'filter_{cli_name}_min'] = float
+            HYPERPARAMETER_TYPES[f'filter_{cli_name}_max'] = float
+
+
+
+# ---------------------------------
+#     Model Pipeline Functions
+# ---------------------------------
 def load_hyperparams() -> argparse.Namespace:
     """
     Parse hyperparameters injected by SageMaker for model training.
@@ -121,8 +148,11 @@ def print_metrics_and_save(booster: xgb.Booster, scores: list, model_dir: Path) 
     booster.save_model(model_dir / "xgboost-model")
 
 
-# ---------------------------- Custom Evaluation Metrics ---------------------------- #
 
+
+# ----------------------------------- #
+#     Custom Evaluation Functions
+# ----------------------------------- #
 def eval_aucpr(preds, dtrain):
     """
     XGBoost feval: computes PR-AUC between labels and predictions.

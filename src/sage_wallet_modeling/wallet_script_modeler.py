@@ -16,6 +16,7 @@ import boto3
 
 # Local module imports
 from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
+import script_modeling.entry_helpers as h
 import utils as u
 from utils import ConfigError
 
@@ -165,6 +166,7 @@ def _launch_hyperparameter_optimization(
     - dict: HPO job details and best training job info (same format as standard training)
     """
     # Extract HPO configuration
+    h.register_filter_hyperparameters(modeling_config)
     hpo_config = modeling_config['training']['hpo']
     max_jobs = hpo_config['max_jobs']
     max_parallel_jobs = hpo_config['max_parallel_jobs']

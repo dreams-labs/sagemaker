@@ -66,8 +66,8 @@ def load_data_matrices(config: dict) -> tuple[xgb.DMatrix, xgb.DMatrix]:
         with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
 
-        training_matrix   = ct.merge_xy_dmatrix(df_train_x, df_train_y, config, metadata)
-        validation_matrix = ct.merge_xy_dmatrix(df_val_x, df_val_y, config, metadata)
+        training_matrix   = ct.build_custom_dmatrix(df_train_x, df_train_y, config, metadata)
+        validation_matrix = ct.build_custom_dmatrix(df_val_x, df_val_y, config, metadata)
     # Base XGB just needs train and validation
     else:
         train_dir = Path(os.environ["SM_CHANNEL_TRAIN"])
@@ -101,6 +101,16 @@ def main() -> None:
     with open(config_path, "r", encoding='utf-8') as f:
         modeling_config = json.load(f)
 
+    # Register dynamic filter hyperparameters
+    h.register_filter_hyperparameters(modeling_config)
+
+    # Load booster params from CLI arguments
+    args = h.load_hyperparams()
+    booster_params = h.build_booster_params(args)
+
+    # Apply CLI filter overrides to config
+    modeling_config = ct.apply_cli_filter_overrides(modeling_config, args)
+
     # Load training and validation matrices
     training_matrix, validation_matrix = load_data_matrices(modeling_config)
 
@@ -109,9 +119,6 @@ def main() -> None:
     df_val_y_raw = pd.read_csv(val_y_dir / "eval_y.csv")
     feval_fn = h.get_eval_function(modeling_config, df_val_y_raw)
 
-    # Load booster params from CLI arguments
-    args = h.load_hyperparams()
-    booster_params = h.build_booster_params(args)
 
     # Train with early stopping and per-round PR-AUC logging
     booster = xgb.train(
