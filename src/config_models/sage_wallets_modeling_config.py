@@ -1,6 +1,7 @@
 """
 Validation logic for items in sagemaker_modeling_config.yaml
 """
+from typing import Optional
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 
@@ -107,7 +108,7 @@ class TrainingConfig(NoExtrasBaseModel):
         ..., description="Custom validation configuration"
     )
     custom_x: bool = Field(...)
-    custom_filters: dict = Field(...)
+    custom_filters: Optional[dict] = Field(...)
     hpo: dict = Field(...)
 
 

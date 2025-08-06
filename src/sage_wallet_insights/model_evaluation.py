@@ -1,13 +1,20 @@
 import sys
 import logging
+from typing import Tuple, Union, Dict
 from pathlib import Path
-from typing import Tuple,Union
+import json
 import pandas as pd
 
-# Add wallet_insights to path    # pylint:disable=wrong-import-position
-sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
+
+# pylint:disable=wrong-import-position
+# ensure script_modeling directory is on path for its module
+script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
+sys.path.insert(0, str(script_modeling_dir))
 from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
-from script_modeling.custom_transforms import preprocess_custom_labels
+from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels
+
+# Import from data-science repo
+sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.model_evaluation as wime
 from utils import ConfigError
 
@@ -166,51 +173,41 @@ def create_concatenated_sagemaker_evaluator(
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
     """
-    # Validate test target
-    if not isinstance(y_test, pd.DataFrame) or y_test.shape[1] != 1:
-        raise ValueError("Expected y_test to be a single-column DataFrame")
-    target_var = y_test.columns[0]
-    y_test_series = y_test.iloc[:, 0].rename(target_var)
-    y_test_pred.index = y_test_series.index
+    # Check if custom transforms are needed
+    custom_transforms_enabled = (
+        modeling_config.get('training', {}).get('custom_x', False) or
+        modeling_config['target'].get('custom_y', False)
+    )
 
-    # Validate optional validation target
-    validation_provided = y_val is not None and y_val_pred is not None
-    if validation_provided:
-        if not isinstance(y_val, pd.DataFrame) or y_val.shape[1] != 1:
-            raise ValueError("Expected y_val to be a single-column DataFrame")
-        y_val_series = y_val.iloc[:, 0].rename(target_var)
-        y_val_pred.index = y_val_series.index
+    if custom_transforms_enabled:
+        # Apply custom transforms and get filtered data
+        y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
+            _apply_custom_transforms_to_concatenated_data(
+                wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val
+            )
 
-    # Load concatenated training and test features
-    base_dir = Path(wallets_config["training_data"]["local_s3_root"])
-    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
-    local_dir = wallets_config["training_data"]["local_directory"]
-    if wallets_config["training_data"].get("dataset", "dev") == "dev":
-        local_dir = f"{local_dir}_dev"
-    data_path = concat_dir / local_dir
+        # For custom transforms, we still need to load train data normally
+        y_train, X_train, _ = _load_concatenated_features(wallets_config, modeling_config)
+        target_var = y_test_final.name
+        y_test_series = y_test_final
+        y_test_pred = y_test_pred_final
 
-    train_df = pd.read_csv(data_path / "train.csv", header=None)
-    test_df = pd.read_csv(data_path / "test.csv", header=None)
+        # Set validation data
+        validation_provided = y_val_final is not None
+        y_val_series = y_val_final if validation_provided else None
+        y_val_pred = y_val_pred_final if validation_provided else None
 
-    y_train = train_df.iloc[:, 0]
-    if modeling_config['target']['custom_y']:
-        # No y appended
-        X_train = train_df
     else:
-        # Appended y in first column
-        X_train = train_df.iloc[:, 1:]
-    X_test = test_df
+        # Use original logic for non-custom transforms
+        target_var, y_test_series, y_test_pred = _validate_and_align_single_target(y_test, y_test_pred)
+        validation_provided = y_val is not None and y_val_pred is not None
+        if validation_provided:
+            _, y_val_series, y_val_pred = _validate_and_align_single_target(y_val, y_val_pred, target_var)
+        else:
+            y_val_series = None
 
-    # Ensure feature count matches
-    expected_n = X_train.shape[1]
-    if X_test.shape[1] != expected_n:
-        raise ValueError(
-            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
-        )
-
-    # Rename feature columns to avoid numeric-only names
-    X_train.columns = [f"feature_{i}" for i in range(expected_n)]
-    X_test.columns = [f"feature_{i}" for i in range(expected_n)]
+        # Load features normally
+        y_train, X_train, X_test_final = _load_concatenated_features(wallets_config, modeling_config)
 
     # Prepare validation placeholders
     X_validation = None
@@ -226,7 +223,7 @@ def create_concatenated_sagemaker_evaluator(
         "returns_winsorization": 0.005,
         "training_data": {"modeling_period_duration": 30},
         "sagemaker_metadata": {
-            "local_directory": local_dir,
+            "local_directory": wallets_config['training_data']['local_directory'],
             "date_suffix": "concat"
         }
     }
@@ -248,7 +245,14 @@ def create_concatenated_sagemaker_evaluator(
             y_val_pred_proba = y_val_pred.copy()
             y_val_pred_binary = (y_val_pred > threshold).astype(int)
 
-    model_id = f"sagemaker_concat_{local_dir}"
+    model_id = f"sagemaker_concat_{wallets_config['training_data']['local_directory']}"
+
+    # Remove "y_val" (raw DataFrame), use only "y_validation"
+    # Update key: "y_val_pred" -> "y_validation_pred"
+    if model_type == "classification":
+        y_validation_pred = y_val_pred_binary
+    else:
+        y_validation_pred = y_val_pred if validation_provided else None
 
     wallet_model_results = {
         "model_id": model_id,
@@ -256,7 +260,7 @@ def create_concatenated_sagemaker_evaluator(
         "model_type": model_type,
         "X_train": X_train,
         "y_train": y_train,
-        "X_test": X_test,
+        "X_test": X_test_final,
         "y_test": y_test_series,
         "y_pred": y_pred,
         "training_cohort_pred": None,
@@ -264,9 +268,7 @@ def create_concatenated_sagemaker_evaluator(
         "X_validation": X_validation,
         "y_validation": y_validation,
         "validation_target_vars_df": y_val,
-        # Remove "y_val" (raw DataFrame), use only "y_validation"
-        # Update key: "y_val_pred" -> "y_validation_pred"
-        "y_validation_pred": y_val_pred_binary if model_type == "classification" else (y_val_pred if validation_provided else None),
+        "y_validation_pred": y_validation_pred,
         "pipeline": create_mock_pipeline(model_type)
     }
 
@@ -284,6 +286,79 @@ def create_concatenated_sagemaker_evaluator(
 # --------------------------
 #      Helper Functions
 # --------------------------
+
+
+def _validate_and_align_single_target(
+    y_df: pd.DataFrame,
+    y_pred: pd.Series,
+    target_var: str = None
+) -> Tuple[str, pd.Series, pd.Series]:
+    """
+    Validate that y_df is a single-column DataFrame, rename its Series to the column name
+    (or use provided target_var), and align y_pred index to the Series index.
+
+    Returns:
+    - target_var (str): name of the target variable
+    - y_series (pd.Series): validated target series
+    - y_pred_aligned (pd.Series): predictions with aligned index
+    """
+    if not isinstance(y_df, pd.DataFrame) or y_df.shape[1] != 1:
+        raise ValueError("Expected a single-column DataFrame for target data")
+    series = y_df.iloc[:, 0]
+    if target_var is None:
+        target_var = y_df.columns[0]
+    series = series.rename(target_var)
+    y_pred_aligned = pd.Series(y_pred.values, index=series.index)
+    return target_var, series, y_pred_aligned
+
+
+# Helper to load concatenated train/test features and y_train, and rename columns
+def _load_concatenated_features(
+    wallets_config: Dict,
+    modeling_config: Dict
+) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
+    """
+    Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
+    and rename feature columns for X_train and X_test.
+
+    Returns:
+    - y_train (Series)
+    - X_train (DataFrame)
+    - X_test (DataFrame)
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
+    local_dir = wallets_config['training_data']['local_directory']
+    if wallets_config['training_data'].get('dataset', 'dev') == 'dev':
+        local_dir = f"{local_dir}_dev"
+    data_path = concat_dir / local_dir
+
+    train_df = pd.read_csv(data_path / 'train.csv', header=None)
+    test_df = pd.read_csv(data_path / 'test.csv', header=None)
+
+    # First column is always y_train
+    y_train = train_df.iloc[:, 0]
+    # Depending on custom_y, split features
+    if modeling_config['target'].get('custom_y', False):
+        X_train = train_df
+    else:
+        X_train = train_df.iloc[:, 1:]
+    X_test = test_df
+
+    # Validate feature dimensions
+    expected_n = X_train.shape[1]
+    if X_test.shape[1] != expected_n:
+        raise ValueError(
+            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
+        )
+
+    # Rename feature columns
+    feature_names = [f"feature_{i}" for i in range(expected_n)]
+    X_train.columns = feature_names
+    X_test.columns = feature_names
+
+    return y_train, X_train, X_test
+
 
 def load_endpoint_sagemaker_predictions(
     data_type: str,
@@ -403,6 +478,116 @@ def load_concatenated_y(
         raise ValueError(f"Found {nan_count} NaN values in {data_type} target data from {csv_path}")
 
     return target_df
+
+
+def _apply_custom_transforms_to_concatenated_data(
+    wallets_config: dict,
+    modeling_config: dict,
+    y_test_pred: pd.Series,
+    y_test: pd.DataFrame,
+    y_val_pred: pd.Series = None,
+    y_val: pd.DataFrame = None
+) -> Tuple[pd.Series, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
+    """
+    Apply custom X and y transforms to concatenated data, returning filtered datasets.
+
+    Params:
+    - wallets_config (dict): Configuration for training data paths
+    - modeling_config (dict): Configuration with custom transform settings
+    - y_test_pred (Series): Raw test predictions
+    - y_test (DataFrame): Raw test targets
+    - y_val_pred (Series, optional): Raw validation predictions
+    - y_val (DataFrame, optional): Raw validation targets
+
+    Returns:
+    - y_test_final (Series): Transformed test targets
+    - X_test_final (DataFrame): Filtered test features
+    - y_test_pred_final (Series): Filtered test predictions
+    - y_val_final (Series): Transformed val targets (if provided)
+    - X_val_final (DataFrame): Filtered val features (if provided)
+    - y_val_pred_final (Series): Filtered val predictions (if provided)
+    """
+    # Load metadata and data paths
+    base_dir = Path(wallets_config["training_data"]["local_s3_root"])
+    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
+    local_dir = wallets_config["training_data"]["local_directory"]
+    if wallets_config["training_data"].get("dataset", "dev") == "dev":
+        local_dir = f"{local_dir}_dev"
+    data_path = concat_dir / local_dir
+
+    # Load metadata for transforms
+    metadata_path = data_path / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata not found at {metadata_path}")
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        metadata = json.load(f)
+
+    # Load test features
+    test_df = pd.read_csv(data_path / "test.csv", header=None)
+
+    # Apply custom X filtering to test data
+    if modeling_config.get('training', {}).get('custom_x', False):
+        test_df_filtered, test_mask = apply_custom_feature_filters(test_df, metadata, modeling_config)
+
+        # Apply same mask to test predictions and targets
+        if len(test_mask) != len(y_test_pred):
+            raise ValueError(f"Test mask length ({len(test_mask)}) doesn't match predictions length ({len(y_test_pred)})")
+
+        y_test_pred_final = y_test_pred[test_mask].reset_index(drop=True)
+        y_test_filtered = y_test[test_mask].reset_index(drop=True)
+        X_test_final = test_df_filtered
+    else:
+        # No X filtering needed
+        X_test_final = test_df
+        y_test_filtered = y_test
+        y_test_pred_final = y_test_pred
+
+    # Apply custom y transforms to test data
+    if modeling_config['target']['custom_y']:
+        y_test_processed = preprocess_custom_labels(y_test_filtered, modeling_config)
+        target_var = modeling_config['target']['target_var']
+        y_test_final = pd.Series(y_test_processed, name=target_var)
+    else:
+        y_test_final = y_test_filtered.iloc[:, 0]
+
+    # Handle validation data if provided
+    y_val_final = None
+    X_val_final = None
+    y_val_pred_final = None
+
+    if y_val is not None and y_val_pred is not None:
+        # Load validation features from concatenated data
+        val_csv_path = data_path / "val.csv"
+        if not val_csv_path.exists():
+            raise FileNotFoundError(f"Validation features not found at {val_csv_path}")
+
+        val_df = pd.read_csv(val_csv_path, header=None)
+
+        # Apply custom X filtering to validation data
+        if modeling_config.get('training', {}).get('custom_x', False):
+            val_df_filtered, val_mask = apply_custom_feature_filters(val_df, metadata, modeling_config)
+
+            # Apply same mask to validation predictions and targets
+            if len(val_mask) != len(y_val_pred):
+                raise ValueError(f"Val mask length ({len(val_mask)}) doesn't match predictions length ({len(y_val_pred)})")
+
+            y_val_pred_final = y_val_pred[val_mask].reset_index(drop=True)
+            y_val_filtered = y_val[val_mask].reset_index(drop=True)
+            X_val_final = val_df_filtered
+        else:
+            # No X filtering needed
+            X_val_final = val_df
+            y_val_filtered = y_val
+            y_val_pred_final = y_val_pred
+
+        # Apply custom y transforms to validation data
+        if modeling_config['target']['custom_y']:
+            y_val_processed = preprocess_custom_labels(y_val_filtered, modeling_config)
+            y_val_final = pd.Series(y_val_processed, name=target_var)
+        else:
+            y_val_final = y_val_filtered.iloc[:, 0]
+
+    return y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final
 
 
 # --------------------------

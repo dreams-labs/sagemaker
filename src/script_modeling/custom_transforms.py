@@ -1,13 +1,12 @@
-
-
+import copy
+import argparse
 import pandas as pd
 import numpy as np
 import xgboost as xgb
 
 
-
 # ------------------------------------------------------------------------ #
-#                    Helpers for Custom Transformations                                 #
+#                             y Transformations                            #
 # ------------------------------------------------------------------------ #
 
 def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
@@ -36,7 +35,60 @@ def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
     return processed_target.values
 
 
-def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict) -> tuple[pd.DataFrame, np.ndarray]:
+
+# ------------------------------------------------------------------------ #
+#                             X Transformations                            #
+# ------------------------------------------------------------------------ #
+
+def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
+    """
+    Apply CLI hyperparameter overrides to custom feature filter configuration.
+
+    Params:
+    - config (dict): Original modeling configuration
+    - args (Namespace): Parsed hyperparameters from SageMaker
+
+    Returns:
+    - dict: Config with filter values overridden by hyperparameters
+    """
+    config_copy = copy.deepcopy(config)
+
+    # Skip if custom_x not enabled
+    if not config_copy.get('training', {}).get('custom_x', False):
+        return config_copy
+
+    custom_filters = config_copy['training'].get('custom_filters', {})
+    if not custom_filters:
+        return config_copy
+
+    # Apply overrides based on cli fields in filter config
+    overrides_applied = []
+    for filter_col, filter_config in custom_filters.items():
+        cli_name = filter_config.get('cli')
+        if not cli_name:
+            continue  # Skip filters without cli field
+
+        # Check for min override: filter_{cli_name}_min
+        min_param = f"filter_{cli_name}_min"
+        if hasattr(args, min_param):
+            override_value = getattr(args, min_param)
+            config_copy['training']['custom_filters'][filter_col]['min'] = override_value
+            overrides_applied.append(f"{min_param}={override_value}")
+
+        # Check for max override: filter_{cli_name}_max
+        max_param = f"filter_{cli_name}_max"
+        if hasattr(args, max_param):
+            override_value = getattr(args, max_param)
+            config_copy['training']['custom_filters'][filter_col]['max'] = override_value
+            overrides_applied.append(f"{max_param}={override_value}")
+
+    if overrides_applied:
+        print(f"Applied CLI filter overrides: {', '.join(overrides_applied)}")
+
+    return config_copy
+
+
+def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dict) -> tuple[pd.DataFrame, np.ndarray]:
     """
     Apply custom row-level filters to feature DataFrame based on config rules.
 
@@ -48,6 +100,15 @@ def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict)
     Returns:
     - tuple: (filtered_df, row_mask) where row_mask indicates kept rows for Y alignment
     """
+    # Get filter definitions
+    custom_filters = config['training']['custom_filters']
+
+    # Early escape if no filters configured
+    if not custom_filters:  # Handles None, {}, and other falsy values
+        print("No custom filters configured, returning unfiltered data")
+        # Return all rows (no filtering applied)
+        return df_x, np.ones(len(df_x), dtype=bool)
+
     feature_columns = metadata['feature_columns']
 
     # Validate feature list length matches X df
@@ -58,9 +119,6 @@ def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict)
     # Assign column names from metadata
     df_x_named = df_x.copy()
     df_x_named.columns = feature_columns
-
-    # Get filter definitions
-    custom_filters = config['training']['custom_filters']
 
     # Verify all filter keys exist in feature list
     missing_columns = []
@@ -85,6 +143,11 @@ def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict)
         # Validate numeric data
         if not pd.api.types.is_numeric_dtype(col_data):
             raise ValueError(f"Filter column '{filter_col}' contains non-numeric data")
+
+        # Print column stats
+        print(f"Column stats for {filter_col}:")
+        print(f"  Min: {col_data.min():,.0f}")
+        print(f"  Max: {col_data.max():,.0f}")
 
         # Apply min filter
         if 'min' in filter_rules:
@@ -129,11 +192,12 @@ def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict)
 
 
 
+
 # ------------------------------------------------------------------------ #
 #                              Main Interface                              #
 # ------------------------------------------------------------------------ #
 
-def merge_xy_dmatrix(
+def build_custom_dmatrix(
         df_x: pd.DataFrame,
         df_y: pd.Series,
         config: dict,
@@ -161,7 +225,7 @@ def merge_xy_dmatrix(
 
     # Apply custom X filtering if enabled
     if config.get('training', {}).get('custom_x', False):
-        df_x_final, row_mask = preprocess_custom_features(df_x, metadata, config)
+        df_x_final, row_mask = apply_custom_feature_filters(df_x, metadata, config)
         df_y_final = df_y[row_mask].reset_index(drop=True)
     else:
         df_x_final = df_x
