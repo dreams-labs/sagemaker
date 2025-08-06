@@ -101,11 +101,8 @@ def main() -> None:
     with open(config_path, "r", encoding='utf-8') as f:
         modeling_config = json.load(f)
 
-    # Register dynamic filter hyperparameters
-    h.register_filter_hyperparameters(modeling_config)
-
     # Load booster params from CLI arguments
-    args = h.load_hyperparams()
+    args = h.load_hyperparams(modeling_config)
     booster_params = h.build_booster_params(args)
 
     # Apply CLI filter overrides to config

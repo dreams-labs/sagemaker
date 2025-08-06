@@ -15,7 +15,6 @@ from sagemaker.exceptions import UnexpectedStatusException
 import boto3
 
 # Local module imports
-from script_modeling.entry_helpers import HYPERPARAMETER_TYPES
 import script_modeling.entry_helpers as h
 import utils as u
 from utils import ConfigError
@@ -166,7 +165,6 @@ def _launch_hyperparameter_optimization(
     - dict: HPO job details and best training job info (same format as standard training)
     """
     # Extract HPO configuration
-    h.register_filter_hyperparameters(modeling_config)
     hpo_config = modeling_config['training']['hpo']
     max_jobs = hpo_config['max_jobs']
     max_parallel_jobs = hpo_config['max_parallel_jobs']
@@ -397,16 +395,17 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
     """
     hpo_config = modeling_config['training']['hpo']
     param_ranges_config = hpo_config['param_ranges']
+    valid_hyperparams = h.get_valid_hyperparameters(modeling_config)
 
     ranges = {}
     for param_name, range_values in param_ranges_config.items():
 
         # Get the type from centralized source
-        if param_name not in HYPERPARAMETER_TYPES:
+        if param_name not in valid_hyperparams:
             raise ConfigError(f"Unknown hyperparameter '{param_name}'. Must "
-                              f"be defined in HYPERPARAMETER_TYPES.")
+                              f"be defined in get_valid_hyperparameters().")
 
-        param_type = HYPERPARAMETER_TYPES[param_name]
+        param_type = valid_hyperparams[param_name]
 
         # Convert Python type to SageMaker parameter object
         if param_type == int:

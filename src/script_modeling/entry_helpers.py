@@ -10,47 +10,48 @@ from sklearn.metrics import average_precision_score
 # ---------------------------------
 #     List of Valid Hyperparams
 # ---------------------------------
-HYPERPARAMETER_TYPES = {
-    # baseline xgb
-    'num_boost_round': int,
-    'max_depth': int,
-    'min_child_weight': int,
-    'eta': float,
-    'early_stopping_rounds': int,
-    'colsample_bytree': float,
-    'subsample': float,
-    'scale_pos_weight': float,
-    'alpha': float,           # L1 regularization
-    'lambda': float,          # L2 regularization
-    'gamma': float,
-
-    # y custom transform
-    'threshold': float,
-
-    # X custom transform
-    # filter_{cli_name}_min: defined via register_filter_hyperparameters
-    # filter_{cli_name}_max: defined via register_filter_hyperparameters
-}
-
-def register_filter_hyperparameters(modeling_config: dict) -> None:
+def get_valid_hyperparameters(modeling_config) -> dict:
     """
-    Dynamically add the filter hyperparams defined in training.custom_filters
-     to HYPERPARAMETER_TYPES.
+    Return the complete set of valid hyperparameters, including dynamic filter params.
+
+    Params:
+    - modeling_config (dict, optional): If provided, includes dynamic filter params
+
+    Returns:
+    - dict: Complete hyperparameter type mapping
     """
-    custom_filters = modeling_config.get('training', {}).get('custom_filters', {})
+    # Base hyperparameters that are always valid
+    base_types = {
+        'num_boost_round': int,
+        'max_depth': int,
+        'min_child_weight': int,
+        'eta': float,
+        'early_stopping_rounds': int,
+        'colsample_bytree': float,
+        'subsample': float,
+        'scale_pos_weight': float,
+        'alpha': float,
+        'lambda': float,
+        'gamma': float,
+        'threshold': float,
+    }
 
-    for filter_config in custom_filters.values():
-        cli_name = filter_config.get('cli')
-        if cli_name:
-            HYPERPARAMETER_TYPES[f'filter_{cli_name}_min'] = float
-            HYPERPARAMETER_TYPES[f'filter_{cli_name}_max'] = float
+    # Add dynamic filter parameters if config provided
+    if modeling_config:
+        custom_filters = modeling_config.get('training', {}).get('custom_filters', {})
+        for filter_config in custom_filters.values():
+            cli_name = filter_config.get('cli')
+            if cli_name:
+                base_types[f'filter_{cli_name}_min'] = float
+                base_types[f'filter_{cli_name}_max'] = float
 
+    return base_types
 
 
 # ---------------------------------
 #     Model Pipeline Functions
 # ---------------------------------
-def load_hyperparams() -> argparse.Namespace:
+def load_hyperparams(modeling_config: dict) -> argparse.Namespace:
     """
     Parse hyperparameters injected by SageMaker for model training.
 
@@ -70,6 +71,7 @@ def load_hyperparams() -> argparse.Namespace:
     ```
     """
     parser = argparse.ArgumentParser()
+    valid_hyperparams = get_valid_hyperparameters(modeling_config)
 
     # Detect which params were passed in CLI
     cli_args = set()
@@ -79,7 +81,7 @@ def load_hyperparams() -> argparse.Namespace:
             cli_args.add(name)
 
     # Add arguments only for hyperparameters present in CLI and known types
-    for name, typ in HYPERPARAMETER_TYPES.items():
+    for name, typ in valid_hyperparams.items():
         if name in cli_args:
             # Special-case bools for CLI parsing
             if typ is bool:
