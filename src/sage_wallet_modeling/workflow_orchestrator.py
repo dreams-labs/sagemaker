@@ -441,6 +441,11 @@ class WalletWorkflowOrchestrator:
         else:
             logger.warning("No metadata.json found in concatenated directory")
 
+        # Validate custom filters against metadata if custom_x is enabled
+        if self.modeling_config.get('training', {}).get('custom_x', False):
+            logger.info("Validating custom filter configuration...")
+            self._validate_custom_filters_config(metadata_file)
+
         return upload_results
 
 
@@ -1189,6 +1194,43 @@ class WalletWorkflowOrchestrator:
                     f"No parquet file found starting with '{prefix}' in {self.data_folder}"
                 )
 
+
+    def _validate_custom_filters_config(self, metadata_file: Path):
+        """
+        Validate custom filter configuration against feature metadata.
+
+        Params:
+        - metadata_file (Path): Path to the metadata.json file
+        """
+        # Load metadata
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+        feature_columns = metadata['feature_columns']
+
+        # Get filter definitions
+        custom_filters = self.modeling_config['training'].get('custom_filters', {})
+
+        if not custom_filters:
+            logger.warning("custom_x enabled but no custom_filters defined")
+            return
+
+        # Validate filter keys exist in feature list
+        missing_columns = []
+        for filter_col in custom_filters.keys():
+            if filter_col not in feature_columns:
+                missing_columns.append(filter_col)
+
+        if missing_columns:
+            raise ValueError(f"Filter columns not found in features: {missing_columns}")
+
+        # Validate filter values are numeric
+        for filter_col, filter_rules in custom_filters.items():
+            for rule_type, rule_value in filter_rules.items():
+                if rule_type in ['min', 'max'] and not isinstance(rule_value, (int, float)):
+                    raise ValueError(f"Filter value must be numeric: {filter_col}.{rule_type} "
+                                     f"= {rule_value} ({type(rule_value)})")
+
+        logger.info(f"Custom filter validation passed: {len(custom_filters)} filters validated")
 
 
     def _get_s3_upload_paths(self) -> tuple[str, str, str]:
