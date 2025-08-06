@@ -956,9 +956,10 @@ class WalletModeler:
         - str: Local file path where predictions were downloaded
         """
         # Construct standardized local path
+        data_suffix = '_dev' if self.wallets_config['training_data']['dataset'] == 'dev' else ''
         local_path = (f"{self.wallets_config['training_data']['local_s3_root']}/"
                       f"s3_downloads/wallet_predictions/"
-                      f"{self.wallets_config['training_data']['local_directory']}/"
+                      f"{self.wallets_config['training_data']['local_directory']}{data_suffix}/"
                       f"{self.date_suffix}/"
                       f"{dataset_type}.csv.out")
 

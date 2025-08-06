@@ -300,14 +300,9 @@ class WalletWorkflowOrchestrator:
         for date_suffix in self.date_suffixes:
             raw_data_by_date[date_suffix] = self._load_single_date_data(date_suffix)
 
-        if self.modeling_config['target']['custom_y']:
-            # Concatenate full y files for all splits
-            y_splits_to_export = ['train', 'eval', 'test', 'val']
-            include_header = True
-        else:
-            # Concatenate y-files for test and val splits only
-            y_splits_to_export = ['test', 'val']
-            include_header = False
+        # Always export full y for all splits with header
+        y_splits_to_export = ['train', 'eval', 'test', 'val']
+        include_header = True
         for split in y_splits_to_export:
             split_offsets = offsets_map.get(split, [])
             if not split_offsets:
@@ -356,10 +351,9 @@ class WalletWorkflowOrchestrator:
         if splits is None:
             splits = ['train', 'eval', 'test', 'val']
 
-        # Append upload_y if we need it for custom transform
-        if self.modeling_config['target']['custom_y']:
-            y_splits = [f"{split}_y" for split in splits]
-            splits = splits + y_splits
+        # Always include y splits for upload
+        y_splits = [f"{split}_y" for split in splits]
+        splits = splits + y_splits
 
         # Determine S3 target paths
         bucket = self.wallets_config['aws']['training_bucket']
@@ -441,10 +435,9 @@ class WalletWorkflowOrchestrator:
         else:
             logger.warning("No metadata.json found in concatenated directory")
 
-        # Validate custom filters against metadata if custom_x is enabled
-        if self.modeling_config.get('training', {}).get('custom_x', False):
-            logger.info("Validating custom filter configuration...")
-            self._validate_custom_filters_config(metadata_file)
+        # Validate custom filters against metadata
+        logger.info("Validating custom filter configuration...")
+        self._validate_custom_filters_config(metadata_file)
 
         return upload_results
 
@@ -830,9 +823,9 @@ class WalletWorkflowOrchestrator:
                 'eval':  upload_results['eval']
             }
         }
-        if self.modeling_config['target']['custom_y']:
-            s3_uris[synthetic_suffix]['train_y'] = upload_results['train_y']
-            s3_uris[synthetic_suffix]['eval_y'] = upload_results['eval_y']
+        # Always include y channel URIs
+        s3_uris[synthetic_suffix]['train_y'] = upload_results['train_y']
+        s3_uris[synthetic_suffix]['eval_y'] = upload_results['eval_y']
 
         # Launch training via WalletModeler
         modeler = WalletModeler(
@@ -1079,15 +1072,10 @@ class WalletWorkflowOrchestrator:
 
         for data_type in data_types:
             for split in splits:
-                # Build filename pattern
-                if (
-                    data_type == 'y' and
-                    self.modeling_config.get('target', {}).get('custom_y', False)
-                ):
-                    # Handle full y loading
+                # Always load full y files for target
+                if data_type == 'y':
                     pattern = f"y_{split}_full_{date_suffix}.parquet"
                 else:
-                    # X loading and base y loading
                     pattern = f"{data_type}_{split}_{date_suffix}.parquet"
 
                 matching_files = list(self.data_folder.glob(pattern))
@@ -1211,7 +1199,7 @@ class WalletWorkflowOrchestrator:
         custom_filters = self.modeling_config['training'].get('custom_filters', {})
 
         if not custom_filters:
-            logger.warning("custom_x enabled but no custom_filters defined")
+            logger.warning("No custom_filters defined, skipping config validation...")
             return
 
         # Validate filter keys exist in feature list

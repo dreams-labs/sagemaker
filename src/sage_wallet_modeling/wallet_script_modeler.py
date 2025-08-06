@@ -125,15 +125,9 @@ def _train_single_period_script_model(
     config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
 
     # Assemble channels and launch training
-    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_y'])
-    # Mount config JSON as a channel
+    channels = _assemble_training_channels(date_uris)
     channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
-    launch_msg = (
-        "Launching script-mode training job with custom targets"
-        if modeling_config['target']['custom_y']
-        else "Launching script-mode training job"
-    )
-    logger.info(f"{launch_msg}: {job_name}")
+    logger.info(f"Launching script-mode training job with custom targets: {job_name}")
     estimator.fit(channels, job_name=job_name, wait=True)
 
     model_uri = estimator.model_data
@@ -226,8 +220,7 @@ def _launch_hyperparameter_optimization(
     # Upload config JSON for this HPO job
     config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
     # Assemble channels and launch HPO
-    channels = _assemble_training_channels(date_uris, modeling_config['target']['custom_y'])
-    # Mount config JSON as part of HPO channels
+    channels = _assemble_training_channels(date_uris)
     channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
     logger.info(f"Launching HPO job: {job_name}")
     ambient_player = u.AmbientPlayer()
@@ -430,37 +423,20 @@ def _get_hpo_parameter_ranges(modeling_config: Dict) -> Dict:
     return ranges
 
 
-def _assemble_training_channels(date_uris: Dict[str, str], custom_y: bool):
+def _assemble_training_channels(date_uris: Dict[str, str]):
     """
-    Assemble SageMaker TrainingInput channels for X (and Y if custom_y).
-
-    Params:
-    - date_uris: dict of channel names to S3 URIs (expects keys 'train', 'eval', and
-        if custom_y: 'train_y', 'eval_y')
-    - custom_y: whether to include label channels
-
-    Returns:
-    - dict: channel_name -> TrainingInput
+    Assemble SageMaker TrainingInput channels for X, Y, and metadata.
     """
-    if custom_y:
-        channels = {
-            'train_x':      TrainingInput(s3_data=date_uris['train'],     content_type='text/csv'),
-            'train_y':      TrainingInput(s3_data=date_uris['train_y'],   content_type='text/csv'),
-            'validation_x': TrainingInput(s3_data=date_uris['eval'],      content_type='text/csv'),
-            'validation_y': TrainingInput(s3_data=date_uris['eval_y'],    content_type='text/csv'),
-        }
-
-        # Metadata URI from any existing URI (they're all in the same directory)
-        sample_uri = next(iter(date_uris.values()))  # Get any URI from the dict
-        metadata_uri = sample_uri.rsplit('/', 1)[0] + '/metadata.json'
-        channels['metadata'] = TrainingInput(s3_data=metadata_uri, content_type='application/json')
-
-    else:
-        channels = {
-            'train':      TrainingInput(s3_data=date_uris['train'], content_type='text/csv'),
-            'validation': TrainingInput(s3_data=date_uris['eval'],   content_type='text/csv'),
-        }
-
+    channels = {
+        'train_x':      TrainingInput(s3_data=date_uris['train'],   content_type='text/csv'),
+        'train_y':      TrainingInput(s3_data=date_uris['train_y'], content_type='text/csv'),
+        'validation_x': TrainingInput(s3_data=date_uris['eval'],    content_type='text/csv'),
+        'validation_y': TrainingInput(s3_data=date_uris['eval_y'],  content_type='text/csv'),
+    }
+    # Metadata URI from any existing URI
+    sample_uri = next(iter(date_uris.values()))
+    metadata_uri = sample_uri.rsplit('/', 1)[0] + '/metadata.json'
+    channels['metadata'] = TrainingInput(s3_data=metadata_uri, content_type='application/json')
     return channels
 
 

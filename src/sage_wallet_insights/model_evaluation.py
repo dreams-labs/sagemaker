@@ -94,12 +94,7 @@ def create_sagemaker_evaluator(
         y_pred_thresh = modeling_config['predicting']['y_pred_threshold']
         wime_modeling_config['y_pred_threshold'] = y_pred_thresh
 
-        # Convert to binary for classification models
-        preprocessor = SageWalletsPreprocessor(wallets_config, modeling_config)
-        y_train = preprocessor.preprocess_y_data(y_train, 'train')
-        y_test = preprocessor.preprocess_y_data(y_test, 'test')
         y_pred_proba = y_test_pred
-        y_val = preprocessor.preprocess_y_data(y_val, 'val')
         y_val_pred_proba = y_val_pred
 
         # Apply y_pred_threshold to convert probabilities to binary predictions
@@ -173,41 +168,22 @@ def create_concatenated_sagemaker_evaluator(
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
     """
-    # Check if custom transforms are needed
-    custom_transforms_enabled = (
-        modeling_config.get('training', {}).get('custom_x', False) or
-        modeling_config['target'].get('custom_y', False)
-    )
+    # Apply custom transforms and get filtered data
+    y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
+        _apply_custom_transforms_to_concatenated_data(
+            wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val
+        )
 
-    if custom_transforms_enabled:
-        # Apply custom transforms and get filtered data
-        y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
-            _apply_custom_transforms_to_concatenated_data(
-                wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val
-            )
+    # For custom transforms, we still need to load train data normally
+    y_train, X_train, _ = _load_concatenated_features(wallets_config, modeling_config)
+    target_var = y_test_final.name
+    y_test_series = y_test_final
+    y_test_pred = y_test_pred_final
 
-        # For custom transforms, we still need to load train data normally
-        y_train, X_train, _ = _load_concatenated_features(wallets_config, modeling_config)
-        target_var = y_test_final.name
-        y_test_series = y_test_final
-        y_test_pred = y_test_pred_final
-
-        # Set validation data
-        validation_provided = y_val_final is not None
-        y_val_series = y_val_final if validation_provided else None
-        y_val_pred = y_val_pred_final if validation_provided else None
-
-    else:
-        # Use original logic for non-custom transforms
-        target_var, y_test_series, y_test_pred = _validate_and_align_single_target(y_test, y_test_pred)
-        validation_provided = y_val is not None and y_val_pred is not None
-        if validation_provided:
-            _, y_val_series, y_val_pred = _validate_and_align_single_target(y_val, y_val_pred, target_var)
-        else:
-            y_val_series = None
-
-        # Load features normally
-        y_train, X_train, X_test_final = _load_concatenated_features(wallets_config, modeling_config)
+    # Set validation data
+    validation_provided = y_val_final is not None
+    y_val_series = y_val_final if validation_provided else None
+    y_val_pred = y_val_pred_final if validation_provided else None
 
     # Prepare validation placeholders
     X_validation = None
@@ -333,17 +309,11 @@ def _load_concatenated_features(
         local_dir = f"{local_dir}_dev"
     data_path = concat_dir / local_dir
 
-    train_df = pd.read_csv(data_path / 'train.csv', header=None)
-    test_df = pd.read_csv(data_path / 'test.csv', header=None)
+    X_train = pd.read_csv(data_path / 'train.csv', header=None)
+    X_test = pd.read_csv(data_path / 'test.csv', header=None)
 
     # First column is always y_train
-    y_train = train_df.iloc[:, 0]
-    # Depending on custom_y, split features
-    if modeling_config['target'].get('custom_y', False):
-        X_train = train_df
-    else:
-        X_train = train_df.iloc[:, 1:]
-    X_test = test_df
+    y_train = X_train.iloc[:, 0]
 
     # Validate feature dimensions
     expected_n = X_train.shape[1]
@@ -416,11 +386,12 @@ def load_bt_sagemaker_predictions(
     - predictions_series (Series): Raw predictions without index alignment
     """
     # Load predictions
+    data_suffix = '_dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
     pred_path = (
         Path(f"{wallets_config['training_data']['local_s3_root']}")
         / "s3_downloads"
         / "wallet_predictions"
-        / f"{wallets_config['training_data']['local_directory']}"
+        / f"{wallets_config['training_data']['local_directory']}{data_suffix}"
         / f"{date_suffix}"
         / f"{data_type}.csv.out"
     )
@@ -451,26 +422,17 @@ def load_concatenated_y(
     Returns:
     - target_series (pd.Series): Series of target values loaded from CSV.
     """
+    data_suffix = '_dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
     base_dir = Path(wallets_config['training_data']['local_s3_root'])
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
-    local_dir = wallets_config['training_data']['local_directory']
+    local_dir = f"{wallets_config['training_data']['local_directory']}{data_suffix}"
     data_path = concat_dir / local_dir
     csv_path = data_path / f"{data_type}_y.csv"
 
     # Handle full y df from custom transform pipeline
-    if modeling_config['target']['custom_y']:
-        full_y_df = pd.read_csv(csv_path)
-        target_series = pd.Series(preprocess_custom_labels(full_y_df, modeling_config))
-        target_df = pd.DataFrame(target_series)
-        # target_df = target_df[[modeling_config['target']['target_var']]]
-        # target_series = target_df[modeling_config['target']['target_var']]
-
-    # Handle single column y df from base pipeline
-    else:
-        # Load the target CSV: test_y.csv or val_y.csv depending on data_type
-        target_df = pd.read_csv(csv_path,header=None)
-        target_series = pd.Series(target_df.iloc[:, 0].values)
-
+    full_y_df = pd.read_csv(csv_path)
+    target_series = pd.Series(preprocess_custom_labels(full_y_df, modeling_config))
+    target_df = pd.DataFrame(target_series)
 
     # Check for NaN values
     if target_series.isna().any():
@@ -526,29 +488,20 @@ def _apply_custom_transforms_to_concatenated_data(
     test_df = pd.read_csv(data_path / "test.csv", header=None)
 
     # Apply custom X filtering to test data
-    if modeling_config.get('training', {}).get('custom_x', False):
-        test_df_filtered, test_mask = apply_custom_feature_filters(test_df, metadata, modeling_config)
+    test_df_filtered, test_mask = apply_custom_feature_filters(test_df, metadata, modeling_config)
 
-        # Apply same mask to test predictions and targets
-        if len(test_mask) != len(y_test_pred):
-            raise ValueError(f"Test mask length ({len(test_mask)}) doesn't match predictions length ({len(y_test_pred)})")
+    # Apply same mask to test predictions and targets
+    if len(test_mask) != len(y_test_pred):
+        raise ValueError(f"Test mask length ({len(test_mask)}) doesn't match predictions length ({len(y_test_pred)})")
 
-        y_test_pred_final = y_test_pred[test_mask].reset_index(drop=True)
-        y_test_filtered = y_test[test_mask].reset_index(drop=True)
-        X_test_final = test_df_filtered
-    else:
-        # No X filtering needed
-        X_test_final = test_df
-        y_test_filtered = y_test
-        y_test_pred_final = y_test_pred
+    y_test_pred_final = y_test_pred[test_mask].reset_index(drop=True)
+    y_test_filtered = y_test[test_mask].reset_index(drop=True)
+    X_test_final = test_df_filtered
 
     # Apply custom y transforms to test data
-    if modeling_config['target']['custom_y']:
-        y_test_processed = preprocess_custom_labels(y_test_filtered, modeling_config)
-        target_var = modeling_config['target']['target_var']
-        y_test_final = pd.Series(y_test_processed, name=target_var)
-    else:
-        y_test_final = y_test_filtered.iloc[:, 0]
+    y_test_processed = preprocess_custom_labels(y_test_filtered, modeling_config)
+    target_var = modeling_config['target']['target_var']
+    y_test_final = pd.Series(y_test_processed, name=target_var)
 
     # Handle validation data if provided
     y_val_final = None
@@ -564,28 +517,19 @@ def _apply_custom_transforms_to_concatenated_data(
         val_df = pd.read_csv(val_csv_path, header=None)
 
         # Apply custom X filtering to validation data
-        if modeling_config.get('training', {}).get('custom_x', False):
-            val_df_filtered, val_mask = apply_custom_feature_filters(val_df, metadata, modeling_config)
+        val_df_filtered, val_mask = apply_custom_feature_filters(val_df, metadata, modeling_config)
 
-            # Apply same mask to validation predictions and targets
-            if len(val_mask) != len(y_val_pred):
-                raise ValueError(f"Val mask length ({len(val_mask)}) doesn't match predictions length ({len(y_val_pred)})")
+        # Apply same mask to validation predictions and targets
+        if len(val_mask) != len(y_val_pred):
+            raise ValueError(f"Val mask length ({len(val_mask)}) doesn't match predictions length ({len(y_val_pred)})")
 
-            y_val_pred_final = y_val_pred[val_mask].reset_index(drop=True)
-            y_val_filtered = y_val[val_mask].reset_index(drop=True)
-            X_val_final = val_df_filtered
-        else:
-            # No X filtering needed
-            X_val_final = val_df
-            y_val_filtered = y_val
-            y_val_pred_final = y_val_pred
+        y_val_pred_final = y_val_pred[val_mask].reset_index(drop=True)
+        y_val_filtered = y_val[val_mask].reset_index(drop=True)
+        X_val_final = val_df_filtered
 
         # Apply custom y transforms to validation data
-        if modeling_config['target']['custom_y']:
-            y_val_processed = preprocess_custom_labels(y_val_filtered, modeling_config)
-            y_val_final = pd.Series(y_val_processed, name=target_var)
-        else:
-            y_val_final = y_val_filtered.iloc[:, 0]
+        y_val_processed = preprocess_custom_labels(y_val_filtered, modeling_config)
+        y_val_final = pd.Series(y_val_processed, name=target_var)
 
     return y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final
 
