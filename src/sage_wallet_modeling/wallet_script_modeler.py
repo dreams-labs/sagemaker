@@ -442,17 +442,25 @@ def _assemble_training_channels(date_uris: Dict[str, str], custom_y: bool):
     - dict: channel_name -> TrainingInput
     """
     if custom_y:
-        return {
+        channels = {
             'train_x':      TrainingInput(s3_data=date_uris['train'],     content_type='text/csv'),
             'train_y':      TrainingInput(s3_data=date_uris['train_y'],   content_type='text/csv'),
             'validation_x': TrainingInput(s3_data=date_uris['eval'],      content_type='text/csv'),
             'validation_y': TrainingInput(s3_data=date_uris['eval_y'],    content_type='text/csv'),
         }
+
+        # Metadata URI from any existing URI (they're all in the same directory)
+        sample_uri = next(iter(date_uris.values()))  # Get any URI from the dict
+        metadata_uri = sample_uri.rsplit('/', 1)[0] + '/metadata.json'
+        channels['metadata'] = TrainingInput(s3_data=metadata_uri, content_type='application/json')
+
     else:
-        return {
+        channels = {
             'train':      TrainingInput(s3_data=date_uris['train'], content_type='text/csv'),
             'validation': TrainingInput(s3_data=date_uris['eval'],   content_type='text/csv'),
         }
+
+    return channels
 
 
 def _upload_config_to_s3(

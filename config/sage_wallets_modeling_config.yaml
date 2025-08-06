@@ -36,9 +36,15 @@ training:
         top_scores: 0.8  # scores above this are validated
     custom_x: True
     custom_filters:
-        trading|total_volume|w1: [1000, 10e6]
-        macro|btc_mvrv_z_score_last|w1: [2.5, 10]
-        cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1: [2e6, 150e6]
+        trading|total_volume|w1:
+            min: 500
+            max: 10000000
+        # macro|btc_mvrv_z_score_last|w1:
+        #     min: 2.5
+        #     max: 10
+        # cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
+        #     min: 2000000
+        #     max: 150000000
 
 
 

@@ -262,6 +262,38 @@ class WalletWorkflowOrchestrator:
             concatenated.to_csv(out_file, index=False, header=False)
             logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
 
+        # Add this after the main concatenation loop, before the y-file exports
+        logger.info("Copying metadata for concatenated dataset...")
+
+        # Load metadata from first available date (they should all be identical)
+        first_date_suffix = list(data_by_date.keys())[0]
+        source_metadata_path = (
+            Path(self.wallets_config['training_data']['local_s3_root'])
+            / "s3_uploads"
+            / "wallet_training_data_preprocessed"
+            / local_dir
+            / first_date_suffix
+            / "metadata.json"
+        )
+
+        if not source_metadata_path.exists():
+            logger.warning(f"No metadata found at {source_metadata_path}, skipping metadata copy")
+        else:
+            # Copy metadata to concatenated directory
+            concat_metadata_path = concat_base / "metadata.json"
+
+            with open(source_metadata_path, 'r', encoding='utf-8') as src:
+                metadata = json.load(src)
+
+            # Update metadata to reflect concatenated nature
+            metadata['concatenated_from_dates'] = list(data_by_date.keys())
+            metadata['concatenation_timestamp'] = pd.Timestamp.now().isoformat()
+
+            with open(concat_metadata_path, 'w', encoding='utf-8') as dst:
+                json.dump(metadata, dst, indent=2)
+
+            logger.info(f"Saved concatenated metadata to {concat_metadata_path}")
+
 
         # Load raw training data for non-preprocessed y-values
         raw_data_by_date = {}
@@ -383,6 +415,36 @@ class WalletWorkflowOrchestrator:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
             executor.map(_upload_split, splits)
+
+        # Add this after the main CSV upload loop, before the return statement
+        logger.info("Uploading concatenated metadata...")
+
+        # Upload metadata.json
+        metadata_file = concat_dir / "metadata.json"
+        if metadata_file.exists():
+            s3_key = f"{base_folder}/{folder_prefix}metadata.json"
+            s3_uri = f"s3://{bucket}/{s3_key}"
+
+            # Check if exists (following same pattern as splits)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=s3_key)
+                if not overwrite_existing:
+                    logger.info(f"Metadata exists, skipping upload: {s3_key}")
+                else:
+                    logger.info(f"Overwriting existing metadata: {s3_uri}")
+                    s3_client.upload_file(str(metadata_file), bucket, s3_key)
+            except ClientError:
+                logger.info(f"Uploading metadata to {s3_uri}")
+                s3_client.upload_file(str(metadata_file), bucket, s3_key)
+
+            upload_results['metadata'] = s3_uri
+        else:
+            logger.warning("No metadata.json found in concatenated directory")
+
+        # Validate custom filters against metadata if custom_x is enabled
+        if self.modeling_config.get('training', {}).get('custom_x', False):
+            logger.info("Validating custom filter configuration...")
+            self._validate_custom_filters_config(metadata_file)
 
         return upload_results
 
@@ -1132,6 +1194,43 @@ class WalletWorkflowOrchestrator:
                     f"No parquet file found starting with '{prefix}' in {self.data_folder}"
                 )
 
+
+    def _validate_custom_filters_config(self, metadata_file: Path):
+        """
+        Validate custom filter configuration against feature metadata.
+
+        Params:
+        - metadata_file (Path): Path to the metadata.json file
+        """
+        # Load metadata
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+        feature_columns = metadata['feature_columns']
+
+        # Get filter definitions
+        custom_filters = self.modeling_config['training'].get('custom_filters', {})
+
+        if not custom_filters:
+            logger.warning("custom_x enabled but no custom_filters defined")
+            return
+
+        # Validate filter keys exist in feature list
+        missing_columns = []
+        for filter_col in custom_filters.keys():
+            if filter_col not in feature_columns:
+                missing_columns.append(filter_col)
+
+        if missing_columns:
+            raise ValueError(f"Filter columns not found in features: {missing_columns}")
+
+        # Validate filter values are numeric
+        for filter_col, filter_rules in custom_filters.items():
+            for rule_type, rule_value in filter_rules.items():
+                if rule_type in ['min', 'max'] and not isinstance(rule_value, (int, float)):
+                    raise ValueError(f"Filter value must be numeric: {filter_col}.{rule_type} "
+                                     f"= {rule_value} ({type(rule_value)})")
+
+        logger.info(f"Custom filter validation passed: {len(custom_filters)} filters validated")
 
 
     def _get_s3_upload_paths(self) -> tuple[str, str, str]:

@@ -36,10 +36,120 @@ def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
     return processed_target.values
 
 
-def merge_xy_dmatrix(df_x: pd.DataFrame, df_y: pd.Series, config: dict) -> xgb.DMatrix:
+def preprocess_custom_features(df_x: pd.DataFrame, metadata: dict, config: dict) -> tuple[pd.DataFrame, np.ndarray]:
     """
-    Build an XGBoost DMatrix by taking raw feature DataFrame and raw label Series,
-    applying any custom-transform logic, and returning the DMatrix.
+    Apply custom row-level filters to feature DataFrame based on config rules.
+
+    Params:
+    - df_x (DataFrame): Raw feature data without headers
+    - metadata (dict): Contains feature_columns list for column name mapping
+    - config (dict): modeling_config with preprocessing.custom_x filter definitions
+
+    Returns:
+    - tuple: (filtered_df, row_mask) where row_mask indicates kept rows for Y alignment
+    """
+    feature_columns = metadata['feature_columns']
+
+    # Validate feature list length matches X df
+    if len(feature_columns) != df_x.shape[1]:
+        raise ValueError(f"Feature column count mismatch: metadata has {len(feature_columns)} "
+                        f"columns, DataFrame has {df_x.shape[1]} columns")
+
+    # Assign column names from metadata
+    df_x_named = df_x.copy()
+    df_x_named.columns = feature_columns
+
+    # Get filter definitions
+    custom_filters = config['training']['custom_filters']
+
+    # Verify all filter keys exist in feature list
+    missing_columns = []
+    for filter_col in custom_filters.keys():
+        if filter_col not in feature_columns:
+            missing_columns.append(filter_col)
+
+    if missing_columns:
+        raise ValueError(f"Filter columns not found in features: {missing_columns}")
+
+    # Initialize filter mask for this column (start with all True)
+    combined_mask = np.ones(len(df_x_named), dtype=bool)
+    filter_mask = np.ones(len(df_x_named), dtype=bool)
+    initial_row_count = len(df_x_named)
+
+    print(f"Starting with {initial_row_count:,} rows before custom filtering")
+
+    # Apply each filter and track impact
+    for filter_col, filter_rules in custom_filters.items():
+        col_data = df_x_named[filter_col]
+
+        # Validate numeric data
+        if not pd.api.types.is_numeric_dtype(col_data):
+            raise ValueError(f"Filter column '{filter_col}' contains non-numeric data")
+
+        # Apply min filter
+        if 'min' in filter_rules:
+            min_val = filter_rules['min']
+            min_mask = col_data >= min_val
+            filter_mask &= min_mask
+            rows_removed_min = (~min_mask).sum()
+            print(f"Filter '{filter_col}' min {min_val}: removed {rows_removed_min:,} rows")
+
+        # Apply max filter
+        if 'max' in filter_rules:
+            max_val = filter_rules['max']
+            max_mask = col_data <= max_val
+            filter_mask &= max_mask
+            rows_removed_max = (~max_mask).sum()
+            print(f"Filter '{filter_col}' max {max_val}: removed {rows_removed_max:,} rows")
+
+        # Combine with overall mask
+        rows_before = combined_mask.sum()
+        combined_mask &= filter_mask
+        rows_after = combined_mask.sum()
+        rows_removed_this_filter = rows_before - rows_after
+
+        print(f"Filter '{filter_col}' total impact: removed {rows_removed_this_filter:,} rows "
+              f"({rows_after:,} remaining)")
+
+    # Final validation
+    final_row_count = combined_mask.sum()
+    total_removed = initial_row_count - final_row_count
+    removal_pct = (total_removed / initial_row_count) * 100
+
+    print(f"Custom filtering complete: {total_removed:,} rows removed ({removal_pct:.1f}%), "
+          f"{final_row_count:,} rows remaining")
+
+    if final_row_count == 0:
+        raise ValueError("All rows filtered out by custom filters - filters may be too restrictive")
+
+    # Apply mask and return
+    filtered_df = df_x_named[combined_mask].reset_index(drop=True)
+
+    return filtered_df, combined_mask
+
+
+
+# ------------------------------------------------------------------------ #
+#                              Main Interface                              #
+# ------------------------------------------------------------------------ #
+
+def merge_xy_dmatrix(
+        df_x: pd.DataFrame,
+        df_y: pd.Series,
+        config: dict,
+        metadata: dict
+    ) -> xgb.DMatrix:
+    """
+    Build XGBoost DMatrix from raw features and labels, applying custom transformations.
+
+    Params:
+    - df_x (DataFrame): Raw feature data without headers
+    - df_y (Series): Raw label data
+    - config (dict): modeling_config with custom transformation settings
+    - metadata (dict): Contains feature_columns and preprocessing metadata
+
+    Returns:
+    - DMatrix: Ready for XGBoost training with aligned features and labels
     """
     # Ensure feature DataFrame is not empty
     if df_x.shape[0] == 0:
@@ -49,16 +159,25 @@ def merge_xy_dmatrix(df_x: pd.DataFrame, df_y: pd.Series, config: dict) -> xgb.D
     if df_x.isnull().values.any():
         raise ValueError("NaNs detected in feature DataFrame")
 
-    labels = preprocess_custom_labels(df_y, config)
+    # Apply custom X filtering if enabled
+    if config.get('training', {}).get('custom_x', False):
+        df_x_final, row_mask = preprocess_custom_features(df_x, metadata, config)
+        df_y_final = df_y[row_mask].reset_index(drop=True)
+    else:
+        df_x_final = df_x
+        df_y_final = df_y
+
+    # Apply y transformation
+    labels = preprocess_custom_labels(df_y_final, config)
 
     # Ensure labels array is not empty
     if labels.shape[0] == 0:
         raise ValueError("Processed label array is empty")
 
     # Ensure features and labels have matching lengths
-    if df_x.shape[0] != labels.shape[0]:
+    if df_x_final.shape[0] != labels.shape[0]:
         raise ValueError(
-            f"Feature rows ({df_x.shape[0]}) and label length ({labels.shape[0]}) must match."
+            f"Feature rows ({df_x_final.shape[0]}) and label length ({labels.shape[0]}) must match."
         )
 
-    return xgb.DMatrix(df_x.values, label=labels)
+    return xgb.DMatrix(df_x_final.values, label=labels)
