@@ -102,19 +102,14 @@ class SageWalletsPreprocessor:
 
             # Preprocess X and y data
             x_preprocessed = self._preprocess_x_data(training_data[x_split], x_split)
-            y_preprocessed = self.preprocess_y_data(training_data[y_split], y_split)
+            y_preprocessed = training_data[y_split]
             processed_data[f"{split_name}_y"] = y_preprocessed
 
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
-                # don't add y to X if we're going to customize it in the container
-                if not self.modeling_config['target']['custom_y']:
-                    # Train and Eval sets need the target var appended as first column
-                    combined_data = self._combine_x_y_data(x_preprocessed, y_preprocessed)
-                    processed_data[split_name] = combined_data
-                else:
-                    # For custom transforms, keep X and y separate (X only for train/eval)
-                    processed_data[split_name] = x_preprocessed
+                # For custom transforms, keep X and y separate (X only for train/eval)
+                processed_data[split_name] = x_preprocessed
+
             else:
                 # Test and Val sets are only used for scoring, and shouldn't have targets
                 processed_data[split_name] = x_preprocessed
@@ -248,64 +243,6 @@ class SageWalletsPreprocessor:
         return df
 
 
-    def preprocess_y_data(self, y_df: pd.DataFrame, split_name: str) -> pd.DataFrame:
-        """
-        Preprocess target data including classification threshold transformation if needed.
-
-        Also used in model_evaluation.py.
-
-        Params:
-        - y_df (DataFrame): Target variable DataFrame with single column
-        - split_name (str): Name of split for error reporting and logging
-
-        Returns:
-        - DataFrame: Preprocessed target data (continuous or binary based on model_type)
-        """
-        # Escape if we're preprocessing inside container later on
-        if self.modeling_config['target']['custom_y']:
-            logger.info("Skipped preprocessing of y_full file.")
-            return y_df
-
-        if len(y_df.columns) != 1:
-            raise ValueError(f"Target DataFrame should have exactly 1 column, "
-                            f"found {len(y_df.columns)} in {split_name}")
-
-        y_processed = y_df.copy()
-        model_type = self.modeling_config['training']['model_type']
-
-        # Apply classification threshold if needed
-        if model_type == 'classification':
-
-            # Convert continuous target to binary
-            threshold = self.modeling_config['target']['classification']['threshold']
-            original_values = y_processed.iloc[:, 0]
-            binary_values = (original_values > threshold).astype(int)
-            y_processed.iloc[:, 0] = binary_values
-
-            # Calculate and log class distribution
-            class_1_count = binary_values.sum()
-            class_0_count = len(binary_values) - class_1_count
-            class_1_pct = (class_1_count / len(binary_values)) * 100
-
-            logger.info(f"Applied classification threshold {threshold} to {split_name}: "
-                    f"{class_1_count:,} positive ({class_1_pct:.1f}%), "
-                    f"{class_0_count:,} negative ({100-class_1_pct:.1f}%)")
-            if class_1_pct < 5:
-                logger.warning(f"Class imbalance in {split_name} below 5%: "
-                        f"{class_1_pct:.1f}% positive class")
-
-        # For regression, just ensure numeric type
-        elif model_type == 'regression':
-            if not pd.api.types.is_numeric_dtype(y_processed.iloc[:, 0]):
-                raise ValueError(f"Target column must be numeric for regression")
-
-        # Convert to float32 for consistency with X data
-        y_processed = y_processed.astype('float32')
-
-        return y_processed
-
-
-
     def _validate_index_alignment(
             self,
             x_df: pd.DataFrame,
@@ -379,28 +316,6 @@ class SageWalletsPreprocessor:
                     mismatch_details += "..."
 
                 raise ValueError(f"Column order mismatch in {split_name}: {mismatch_details}")
-
-
-    def _combine_x_y_data(self, x_df: pd.DataFrame, y_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Combine X and y DataFrames with target variable as first column.
-
-        Params:
-        - x_df (DataFrame): Preprocessed features
-        - y_df (DataFrame): Target variable
-
-        Returns:
-        - DataFrame: Combined data with target as first column, no headers
-        """
-        if len(y_df.columns) != 1:
-            raise ValueError(f"Found {len(y_df.columns)} columns in y df, which "
-                             "should only have 1 column.")
-
-        # Combine with target as first column
-        combined_df = pd.concat([y_df, x_df], axis=1)
-        logger.info(f"Merged y df with target var {y_df.columns[0]} with X data.")
-
-        return combined_df
 
 
     def _compile_training_metadata(self, training_data: dict) -> dict:

@@ -53,10 +53,6 @@ def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
     """
     config_copy = copy.deepcopy(config)
 
-    # Skip if custom_x not enabled
-    if not config_copy.get('training', {}).get('custom_x', False):
-        return config_copy
-
     custom_filters = config_copy['training'].get('custom_filters', {})
     if not custom_filters:
         return config_copy
@@ -95,7 +91,7 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
     Params:
     - df_x (DataFrame): Raw feature data without headers
     - metadata (dict): Contains feature_columns list for column name mapping
-    - config (dict): modeling_config with preprocessing.custom_x filter definitions
+    - config (dict): modeling_config with preprocessing X filter definitions
 
     Returns:
     - tuple: (filtered_df, row_mask) where row_mask indicates kept rows for Y alignment
@@ -224,12 +220,8 @@ def build_custom_dmatrix(
         raise ValueError("NaNs detected in feature DataFrame")
 
     # Apply custom X filtering if enabled
-    if config.get('training', {}).get('custom_x', False):
-        df_x_final, row_mask = apply_custom_feature_filters(df_x, metadata, config)
-        df_y_final = df_y[row_mask].reset_index(drop=True)
-    else:
-        df_x_final = df_x
-        df_y_final = df_y
+    df_x_final, row_mask = apply_custom_feature_filters(df_x, metadata, config)
+    df_y_final = df_y[row_mask].reset_index(drop=True)
 
     # Apply y transformation
     labels = preprocess_custom_labels(df_y_final, config)

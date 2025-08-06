@@ -46,34 +46,25 @@ def load_data_matrices(config: dict) -> tuple[xgb.DMatrix, xgb.DMatrix]:
     - training_matrix (DMatrix): training data matrix.
     - validation_matrix (DMatrix): validation data matrix.
     """
+    # Load CSVs
+    train_x_dir = Path(os.environ["SM_CHANNEL_TRAIN_X"])
+    train_y_dir = Path(os.environ["SM_CHANNEL_TRAIN_Y"])
+    val_x_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_X"])
+    val_y_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
 
-    # Custom transforms need all files
-    if config["target"]["custom_y"]:
-        # Load CSVs
-        train_x_dir = Path(os.environ["SM_CHANNEL_TRAIN_X"])
-        train_y_dir = Path(os.environ["SM_CHANNEL_TRAIN_Y"])
-        val_x_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_X"])
-        val_y_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
+    df_train_x = pd.read_csv(train_x_dir / "train.csv", header=None)
+    df_val_x   = pd.read_csv(val_x_dir   / "eval.csv",  header=None)
+    df_train_y = pd.read_csv(train_y_dir / "train_y.csv")
+    df_val_y   = pd.read_csv(val_y_dir   / "eval_y.csv")
 
-        df_train_x = pd.read_csv(train_x_dir / "train.csv", header=None)
-        df_val_x   = pd.read_csv(val_x_dir   / "eval.csv",  header=None)
-        df_train_y = pd.read_csv(train_y_dir / "train_y.csv")
-        df_val_y   = pd.read_csv(val_y_dir   / "eval_y.csv")
+    # Load metadata
+    metadata_dir = Path(os.environ["SM_CHANNEL_METADATA"])
+    metadata_path = metadata_dir / "metadata.json"
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        metadata = json.load(f)
 
-        # Load metadata
-        metadata_dir = Path(os.environ["SM_CHANNEL_METADATA"])
-        metadata_path = metadata_dir / "metadata.json"
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-
-        training_matrix   = ct.build_custom_dmatrix(df_train_x, df_train_y, config, metadata)
-        validation_matrix = ct.build_custom_dmatrix(df_val_x, df_val_y, config, metadata)
-    # Base XGB just needs train and validation
-    else:
-        train_dir = Path(os.environ["SM_CHANNEL_TRAIN"])
-        val_dir   = Path(os.environ["SM_CHANNEL_VALIDATION"])
-        training_matrix   = h.load_csv_as_dmatrix(train_dir / "train.csv")
-        validation_matrix = h.load_csv_as_dmatrix(val_dir   / "eval.csv")
+    training_matrix   = ct.build_custom_dmatrix(df_train_x, df_train_y, config, metadata)
+    validation_matrix = ct.build_custom_dmatrix(df_val_x, df_val_y, config, metadata)
 
     return training_matrix, validation_matrix
 

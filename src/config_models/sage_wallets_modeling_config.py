@@ -107,7 +107,6 @@ class TrainingConfig(NoExtrasBaseModel):
     custom_val: CustomValConfig = Field(
         ..., description="Custom validation configuration"
     )
-    custom_x: bool = Field(...)
     custom_filters: Optional[dict] = Field(...)
     hpo: dict = Field(...)
 
@@ -138,9 +137,6 @@ class TargetConfig(NoExtrasBaseModel):
     """
     classification: ClassificationConfig = Field(
         ..., description="Classification target settings"
-    )
-    custom_y: bool = Field(
-        ..., description="Whether to apply custom transformation logic to the target"
     )
     target_var: str = Field(
         ..., description="Target variable used for training"

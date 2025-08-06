@@ -6,17 +6,16 @@ training_data: #SageMaker
     # local_directory: dda_930_concat_model  # where to store local artifacts
     # upload_directory: dda-930-vt-perf  # new S3 folder name in bucket training_data_processed
 
-    local_directory: dda_940_export_targets  # where to store local artifacts
-    upload_directory: dda-940-exp-tars  # new S3 folder name in bucket training_data_processed
+    local_directory: dda_945_custom_only  # where to store local artifacts
+    upload_directory: dda-945-custom-only  # new S3 folder name in bucket training_data_processed
     # local_directory: dda_940_export_targets_base  # where to store local artifacts
     # upload_directory: dda-940-exp-tars-b  # new S3 folder name in bucket training_data_processed
 
-    dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
+    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
 
     train_offsets: [
-        # '191228',
         # '200127',
         # '200226',
         # '200327',
