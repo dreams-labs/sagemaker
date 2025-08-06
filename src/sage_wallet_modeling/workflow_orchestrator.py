@@ -262,6 +262,38 @@ class WalletWorkflowOrchestrator:
             concatenated.to_csv(out_file, index=False, header=False)
             logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
 
+        # Add this after the main concatenation loop, before the y-file exports
+        logger.info("Copying metadata for concatenated dataset...")
+
+        # Load metadata from first available date (they should all be identical)
+        first_date_suffix = list(data_by_date.keys())[0]
+        source_metadata_path = (
+            Path(self.wallets_config['training_data']['local_s3_root'])
+            / "s3_uploads"
+            / "wallet_training_data_preprocessed"
+            / local_dir
+            / first_date_suffix
+            / "metadata.json"
+        )
+
+        if not source_metadata_path.exists():
+            logger.warning(f"No metadata found at {source_metadata_path}, skipping metadata copy")
+        else:
+            # Copy metadata to concatenated directory
+            concat_metadata_path = concat_base / "metadata.json"
+
+            with open(source_metadata_path, 'r', encoding='utf-8') as src:
+                metadata = json.load(src)
+
+            # Update metadata to reflect concatenated nature
+            metadata['concatenated_from_dates'] = list(data_by_date.keys())
+            metadata['concatenation_timestamp'] = pd.Timestamp.now().isoformat()
+
+            with open(concat_metadata_path, 'w', encoding='utf-8') as dst:
+                json.dump(metadata, dst, indent=2)
+
+            logger.info(f"Saved concatenated metadata to {concat_metadata_path}")
+
 
         # Load raw training data for non-preprocessed y-values
         raw_data_by_date = {}
