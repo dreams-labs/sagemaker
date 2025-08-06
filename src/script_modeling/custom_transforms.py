@@ -5,9 +5,6 @@ import numpy as np
 import xgboost as xgb
 
 
-
-
-
 # ------------------------------------------------------------------------ #
 #                             y Transformations                            #
 # ------------------------------------------------------------------------ #
@@ -146,6 +143,11 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
         # Validate numeric data
         if not pd.api.types.is_numeric_dtype(col_data):
             raise ValueError(f"Filter column '{filter_col}' contains non-numeric data")
+
+        # Print column stats
+        print(f"Column stats for {filter_col}:")
+        print(f"  Min: {col_data.min():,.0f}")
+        print(f"  Max: {col_data.max():,.0f}")
 
         # Apply min filter
         if 'min' in filter_rules:
