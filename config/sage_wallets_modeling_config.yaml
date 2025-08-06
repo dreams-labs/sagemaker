@@ -38,7 +38,7 @@ training:
     custom_filters:
         trading|total_volume|w1:
             min: 500
-            max: 10e7
+            max: 10000000
         # macro|btc_mvrv_z_score_last|w1:
         #     min: 2.5
         #     max: 10
