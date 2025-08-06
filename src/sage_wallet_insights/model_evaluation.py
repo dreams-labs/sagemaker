@@ -1,7 +1,7 @@
 import sys
 import logging
+from typing import Tuple, Union, Dict
 from pathlib import Path
-from typing import Tuple,Union
 import pandas as pd
 
 # Add wallet_insights to path    # pylint:disable=wrong-import-position
@@ -166,51 +166,16 @@ def create_concatenated_sagemaker_evaluator(
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
     """
-    # Validate test target
-    if not isinstance(y_test, pd.DataFrame) or y_test.shape[1] != 1:
-        raise ValueError("Expected y_test to be a single-column DataFrame")
-    target_var = y_test.columns[0]
-    y_test_series = y_test.iloc[:, 0].rename(target_var)
-    y_test_pred.index = y_test_series.index
+    # Validate and align test target
+    target_var, y_test_series, y_test_pred = _validate_and_align_single_target(y_test, y_test_pred)
 
-    # Validate optional validation target
+    # Check if validation data provided and align if so
     validation_provided = y_val is not None and y_val_pred is not None
     if validation_provided:
-        if not isinstance(y_val, pd.DataFrame) or y_val.shape[1] != 1:
-            raise ValueError("Expected y_val to be a single-column DataFrame")
-        y_val_series = y_val.iloc[:, 0].rename(target_var)
-        y_val_pred.index = y_val_series.index
+        _, y_val_series, y_val_pred = _validate_and_align_single_target(y_val, y_val_pred, target_var)
 
-    # Load concatenated training and test features
-    base_dir = Path(wallets_config["training_data"]["local_s3_root"])
-    concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
-    local_dir = wallets_config["training_data"]["local_directory"]
-    if wallets_config["training_data"].get("dataset", "dev") == "dev":
-        local_dir = f"{local_dir}_dev"
-    data_path = concat_dir / local_dir
-
-    train_df = pd.read_csv(data_path / "train.csv", header=None)
-    test_df = pd.read_csv(data_path / "test.csv", header=None)
-
-    y_train = train_df.iloc[:, 0]
-    if modeling_config['target']['custom_y']:
-        # No y appended
-        X_train = train_df
-    else:
-        # Appended y in first column
-        X_train = train_df.iloc[:, 1:]
-    X_test = test_df
-
-    # Ensure feature count matches
-    expected_n = X_train.shape[1]
-    if X_test.shape[1] != expected_n:
-        raise ValueError(
-            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
-        )
-
-    # Rename feature columns to avoid numeric-only names
-    X_train.columns = [f"feature_{i}" for i in range(expected_n)]
-    X_test.columns = [f"feature_{i}" for i in range(expected_n)]
+    # Load concatenated train/test features and extract y_train
+    y_train, X_train, X_test = _load_concatenated_features(wallets_config, modeling_config)
 
     # Prepare validation placeholders
     X_validation = None
@@ -226,7 +191,7 @@ def create_concatenated_sagemaker_evaluator(
         "returns_winsorization": 0.005,
         "training_data": {"modeling_period_duration": 30},
         "sagemaker_metadata": {
-            "local_directory": local_dir,
+            "local_directory": wallets_config['training_data']['local_directory'],
             "date_suffix": "concat"
         }
     }
@@ -248,7 +213,14 @@ def create_concatenated_sagemaker_evaluator(
             y_val_pred_proba = y_val_pred.copy()
             y_val_pred_binary = (y_val_pred > threshold).astype(int)
 
-    model_id = f"sagemaker_concat_{local_dir}"
+    model_id = f"sagemaker_concat_{wallets_config['training_data']['local_directory']}"
+
+    # Remove "y_val" (raw DataFrame), use only "y_validation"
+    # Update key: "y_val_pred" -> "y_validation_pred"
+    if model_type == "classification":
+        y_validation_pred = y_val_pred_binary
+    else:
+        y_validation_pred = y_val_pred if validation_provided else None
 
     wallet_model_results = {
         "model_id": model_id,
@@ -264,9 +236,7 @@ def create_concatenated_sagemaker_evaluator(
         "X_validation": X_validation,
         "y_validation": y_validation,
         "validation_target_vars_df": y_val,
-        # Remove "y_val" (raw DataFrame), use only "y_validation"
-        # Update key: "y_val_pred" -> "y_validation_pred"
-        "y_validation_pred": y_val_pred_binary if model_type == "classification" else (y_val_pred if validation_provided else None),
+        "y_validation_pred": y_validation_pred,
         "pipeline": create_mock_pipeline(model_type)
     }
 
@@ -284,6 +254,79 @@ def create_concatenated_sagemaker_evaluator(
 # --------------------------
 #      Helper Functions
 # --------------------------
+
+
+def _validate_and_align_single_target(
+    y_df: pd.DataFrame,
+    y_pred: pd.Series,
+    target_var: str = None
+) -> Tuple[str, pd.Series, pd.Series]:
+    """
+    Validate that y_df is a single-column DataFrame, rename its Series to the column name
+    (or use provided target_var), and align y_pred index to the Series index.
+
+    Returns:
+    - target_var (str): name of the target variable
+    - y_series (pd.Series): validated target series
+    - y_pred_aligned (pd.Series): predictions with aligned index
+    """
+    if not isinstance(y_df, pd.DataFrame) or y_df.shape[1] != 1:
+        raise ValueError("Expected a single-column DataFrame for target data")
+    series = y_df.iloc[:, 0]
+    if target_var is None:
+        target_var = y_df.columns[0]
+    series = series.rename(target_var)
+    y_pred_aligned = pd.Series(y_pred.values, index=series.index)
+    return target_var, series, y_pred_aligned
+
+
+# Helper to load concatenated train/test features and y_train, and rename columns
+def _load_concatenated_features(
+    wallets_config: Dict,
+    modeling_config: Dict
+) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
+    """
+    Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
+    and rename feature columns for X_train and X_test.
+
+    Returns:
+    - y_train (Series)
+    - X_train (DataFrame)
+    - X_test (DataFrame)
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
+    local_dir = wallets_config['training_data']['local_directory']
+    if wallets_config['training_data'].get('dataset', 'dev') == 'dev':
+        local_dir = f"{local_dir}_dev"
+    data_path = concat_dir / local_dir
+
+    train_df = pd.read_csv(data_path / 'train.csv', header=None)
+    test_df = pd.read_csv(data_path / 'test.csv', header=None)
+
+    # First column is always y_train
+    y_train = train_df.iloc[:, 0]
+    # Depending on custom_y, split features
+    if modeling_config['target'].get('custom_y', False):
+        X_train = train_df
+    else:
+        X_train = train_df.iloc[:, 1:]
+    X_test = test_df
+
+    # Validate feature dimensions
+    expected_n = X_train.shape[1]
+    if X_test.shape[1] != expected_n:
+        raise ValueError(
+            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
+        )
+
+    # Rename feature columns
+    feature_names = [f"feature_{i}" for i in range(expected_n)]
+    X_train.columns = feature_names
+    X_test.columns = feature_names
+
+    return y_train, X_train, X_test
+
 
 def load_endpoint_sagemaker_predictions(
     data_type: str,
