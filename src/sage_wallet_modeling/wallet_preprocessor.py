@@ -105,6 +105,9 @@ class SageWalletsPreprocessor:
             y_preprocessed = training_data[y_split]
             processed_data[f"{split_name}_y"] = y_preprocessed
 
+            # Append additional column
+            x_preprocessed = self._retain_offset_date(x_preprocessed)
+
             # Store preprocessed data in our results dict
             if split_name in ['train', 'eval']:
                 # For custom transforms, keep X and y separate (X only for train/eval)
@@ -114,7 +117,7 @@ class SageWalletsPreprocessor:
                 # Test and Val sets are only used for scoring, and shouldn't have targets
                 processed_data[split_name] = x_preprocessed
 
-            # Save preprocessed split to local file
+            # Save preprocessed X data to local file
             self._save_preprocessed_df(processed_data[split_name], split_name)
 
             # Save preprocessed y data to local file
@@ -124,7 +127,9 @@ class SageWalletsPreprocessor:
                         f"× {processed_data[split_name].shape[1]} cols.")
 
         # Save metadata alongside CSV files
-        processed_data['metadata'] = self._compile_training_metadata(training_data)
+        processed_data['metadata'] = self._compile_training_metadata(
+            processed_data['train'].copy(),
+            processed_data['train_y'].copy())
         metadata_file = self.output_base / self.date_suffix / "metadata.json"
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(processed_data['metadata'], f, indent=2)
@@ -243,6 +248,43 @@ class SageWalletsPreprocessor:
         return df
 
 
+    def _retain_offset_date(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extract epoch_start_date from index and prepend as first column for temporal filtering.
+        Converts dates to days since configured reference date for numeric compatibility.
+
+        Params:
+        - df (DataFrame): Preprocessed features with MultiIndex containing epoch_start_date
+
+        Returns:
+        - DataFrame: Features with offset_date as first column (days since date_0)
+        """
+        # Get reference date from config (format: YYMMDD string)
+        date_0_str = str(self.wallets_config['training_data']['date_0'])
+
+        # Parse YYMMDD format to datetime
+        reference_date = pd.to_datetime(date_0_str, format='%y%m%d')
+
+        # Extract epoch_start_date from the MultiIndex
+        offset_dates = df.index.get_level_values('epoch_start_date')
+
+        # Convert to days since reference date (as float32 for XGBoost)
+        # This gives us integers like 30, 60, 90 for monthly offsets
+        offset_days = (offset_dates - reference_date).days.astype('float32')
+
+        # Reset index first to work with clean DataFrame
+        df = df.reset_index(drop=True)
+
+        # Insert offset_date as first column
+        df.insert(0, 'offset_date', offset_days)
+
+        # Log the range of offset dates for debugging
+        logger.debug(f"Offset dates range: {offset_days.min():.0f} to {offset_days.max():.0f} "
+                    f"days from {reference_date.strftime('%Y-%m-%d')}")
+
+        return df
+
+
     def _validate_index_alignment(
             self,
             x_df: pd.DataFrame,
@@ -318,30 +360,32 @@ class SageWalletsPreprocessor:
                 raise ValueError(f"Column order mismatch in {split_name}: {mismatch_details}")
 
 
-    def _compile_training_metadata(self, training_data: dict) -> dict:
+    def _compile_training_metadata(
+            self,
+            processed_x: pd.DataFrame,
+            processed_y: pd.DataFrame
+        ) -> dict:
         """
         Compile metadata about training configuration and feature columns.
 
         Params:
-        - training_data (dict): Full training data dictionary with all splits
+        - processed_x (DataFrame): Preprocessed features DataFrame
+        - processed_y (DataFrame): Preprocessed target DataFrame
 
         Returns:
         - dict: Complete metadata including config and column information
         """
-        x_train_df = training_data['x_train']
-        y_train_df = training_data['y_train']
-        target_column_name = y_train_df.columns[0]
+        target_column_name = processed_y.columns[0]
 
         metadata = {
             'sage_wallets_config': self.wallets_config,
-            'feature_columns': x_train_df.columns.tolist(),
-            'feature_count': len(x_train_df.columns),
+            'feature_columns': processed_x.columns.tolist(),
+            'feature_count': len(processed_x.columns),
             'target_variable': target_column_name,
             'preprocessing_timestamp': pd.Timestamp.now().isoformat()
         }
 
         return metadata
-
 
     def _save_preprocessed_df(self, df: pd.DataFrame, split_name: str) -> None:
         """
