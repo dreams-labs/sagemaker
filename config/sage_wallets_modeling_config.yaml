@@ -11,8 +11,8 @@ metaparams:
     # instance_type: ml.c6i.4xlarge
     instance_count: 1
     # batch_trans_instance_type: ml.c5.2xlarge
-    batch_trans_instance_type: ml.m5.2xlarge
-    # batch_trans_instance_type: ml.m6i.xlarge
+    # batch_trans_instance_type: ml.m5.2xlarge
+    batch_trans_instance_type: ml.m6i.xlarge
     batch_trans_instance_count: 1
 
 script_mode:
