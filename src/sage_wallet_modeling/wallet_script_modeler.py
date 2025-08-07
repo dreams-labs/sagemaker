@@ -121,12 +121,23 @@ def _train_single_period_script_model(
 
     # Assemble job name
     job_name = _build_job_name("wscr", upload_dir, date_suffix)
-    # Upload config JSON for this run
-    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
-
-    # Assemble channels and launch training
+    # Upload config JSON for this HPO job
+    configs_s3_dict = _upload_config_to_s3(
+        wallets_config,
+        modeling_config,
+        bucket,
+        upload_dir,
+        job_name
+    )
+    # Assemble channels
     channels = _assemble_training_channels(date_uris)
-    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
+    config_channels = {
+        name: TrainingInput(s3_data=uri, content_type='application/json')
+        for name, uri in configs_s3_dict.items()
+    }
+    channels.update(config_channels)
+
+    # Launch job
     logger.info(f"Launching script-mode training job with custom targets: {job_name}")
     estimator.fit(channels, job_name=job_name, wait=True)
 
@@ -218,10 +229,22 @@ def _launch_hyperparameter_optimization(
     # Build job name and prepare inputs
     job_name = _build_job_name("whpo", upload_dir, date_suffix)
     # Upload config JSON for this HPO job
-    config_s3_uri = _upload_config_to_s3(modeling_config, bucket, upload_dir, job_name)
-    # Assemble channels and launch HPO
+    configs_s3_dict = _upload_config_to_s3(
+        wallets_config,
+        modeling_config,
+        bucket,
+        upload_dir,
+        job_name
+    )
+    # Assemble channels
     channels = _assemble_training_channels(date_uris)
-    channels['config'] = TrainingInput(s3_data=config_s3_uri, content_type='application/json')
+    config_channels = {
+        name: TrainingInput(s3_data=uri, content_type='application/json')
+        for name, uri in configs_s3_dict.items()
+    }
+    channels.update(config_channels)
+
+    # Launch job
     logger.info(f"Launching HPO job: {job_name}")
     ambient_player = u.AmbientPlayer()
     ambient_player.start('spaceship_ambient_loop')
@@ -268,6 +291,9 @@ def train_temporal_cv_script_model(
     cv_s3_uri: str,
 ) -> Dict[str, str]:
     """
+    DEPRECATED: replaced with _train_single_period_script_model() but retained
+     as a code reference.
+
     Launch a SageMaker script-mode XGBoost training job for cross-date CV.
 
     Params:
@@ -441,13 +467,42 @@ def _assemble_training_channels(date_uris: Dict[str, str]):
 
 
 def _upload_config_to_s3(
-    config_dict: Dict,
+    wallets_config: Dict,
+    modeling_config: Dict,
     bucket: str,
     upload_dir: str,
     job_name: str
-) -> str:
-    """Upload modeling_config JSON to S3 and return its S3 URI."""
+) -> Dict[str, str]:
+    """
+    Upload modeling_config and wallets_config as separate JSON files to S3.
+
+    Returns:
+    - dict: S3 URIs for each config file
+        {
+            'wallets_config': 's3://bucket/path/wallets_config.json'
+            'modeling_config': 's3://bucket/path/modeling_config.json',
+        }
+    """
     s3_client = boto3.client('s3')
-    key = f"{upload_dir}/config/{job_name}/modeling_config.json"
-    s3_client.put_object(Bucket=bucket, Key=key, Body=json.dumps(config_dict))
-    return f"s3://{bucket}/{key}"
+    config_dir_prefix = f"{upload_dir}/config/{job_name}"
+
+    # Upload modeling_config.json
+    modeling_key = f"{config_dir_prefix}/modeling_config.json"
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=modeling_key,
+        Body=json.dumps(modeling_config, indent=2)
+    )
+
+    # Upload wallets_config.json
+    wallets_key = f"{config_dir_prefix}/wallets_config.json"
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=wallets_key,
+        Body=json.dumps(wallets_config, indent=2)
+    )
+
+    return {
+        'modeling_config': f"s3://{bucket}/{modeling_key}",
+        'wallets_config': f"s3://{bucket}/{wallets_key}"
+    }

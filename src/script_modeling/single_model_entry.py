@@ -84,13 +84,10 @@ def main() -> None:
     filepaths are relative to the container only and have no impact on S3 or
     local directories.
     """
-    # Load modeling_config JSON
-    config_dir  = Path(os.environ["SM_CHANNEL_CONFIG"])
-    config_path = config_dir / "modeling_config.json"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found at {config_path}")
-    with open(config_path, "r", encoding='utf-8') as f:
-        modeling_config = json.load(f)
+    # Load config JSONs
+    wallets_config, modeling_config = h.load_configs()
+    print(wallets_config)
+    print(modeling_config)
 
     # Load booster params from CLI arguments
     args = h.load_hyperparams(modeling_config)
