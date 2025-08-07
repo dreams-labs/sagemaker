@@ -40,6 +40,83 @@ def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
 #                             X Transformations                            #
 # ------------------------------------------------------------------------ #
 
+def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
+    """
+    Convert YYMMDD offset strings to integer days since date_0, with optional shift.
+
+    Params:
+    - wallets_config (dict): Contains date_0 and offset arrays
+    - shift (int): Days to add to all offsets (for temporal validation)
+
+    Returns:
+    - dict: {'train_offsets': [days], 'eval_offsets': [days], ...}
+    """
+    # Parse reference date
+    date_0_str = str(wallets_config['training_data']['date_0'])
+    date_0 = pd.to_datetime(date_0_str, format='%y%m%d')
+
+    result = {}
+    offset_keys = ['train_offsets', 'eval_offsets', 'test_offsets', 'val_offsets']
+
+    for key in offset_keys:
+        if key in wallets_config['training_data']:
+            date_strings = wallets_config['training_data'][key]
+            offset_days = []
+
+            for date_str in date_strings:
+                date_obj = pd.to_datetime(str(date_str), format='%y%m%d')
+                days_diff = (date_obj - date_0).days + shift
+                offset_days.append(days_diff)
+
+            result[key] = offset_days
+
+    return result
+
+
+def select_shifted_offsets(
+    df_x_full: pd.DataFrame,
+    df_y_full: pd.DataFrame,
+    wallets_config: dict,
+    epoch_shift: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Filter X and Y data to only include rows from shifted epoch offsets.
+
+    Params:
+    - df_x_full (DataFrame): Full feature data with offset_date as first column
+    - df_y_full (DataFrame): Full target data (same row count as df_x_full)
+    - wallets_config (dict): Contains base offset definitions and date_0
+    - epoch_shift (int): Days to shift all base offsets (e.g., 0, 30, 60, 90)
+
+    Returns:
+    - tuple: (df_x_filtered, df_y_filtered) with identical row filtering applied
+
+    Logic:
+    - Extract offset_date column from df_x_full
+    - Get base train_offsets from wallets_config
+    - Apply epoch_shift to get target offset_days
+    - Filter both DataFrames to only include rows with matching offset_date values
+    """
+    # Extract offset_date column (first column of df_x_full)
+    offset_dates = df_x_full.iloc[:, 0]
+
+    # Get shifted target offsets
+    base_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
+    target_offset_days = base_offsets['train_offsets']  # Use train offsets for filtering
+
+    print(f"Unique offset_date values in data: {sorted(offset_dates.unique())}")
+    print(f"Target offset_days after {epoch_shift} shift: {target_offset_days}")
+
+    # Create mask for rows with target offset_date values
+    mask = offset_dates.isin(target_offset_days)
+
+    # Apply identical filtering to both X and Y
+    df_x_filtered = df_x_full[mask].reset_index(drop=True)
+    df_y_filtered = df_y_full[mask].reset_index(drop=True)
+
+    return df_x_filtered, df_y_filtered
+
+
 def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
     """
     Apply CLI hyperparameter overrides to custom feature filter configuration.

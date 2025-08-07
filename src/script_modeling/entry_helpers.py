@@ -36,6 +36,7 @@ def get_valid_hyperparameters(modeling_config) -> dict:
         'lambda': float,
         'gamma': float,
         'threshold': float,
+        'epoch_shift': int
     }
 
     # Add dynamic filter parameters if config provided
@@ -124,39 +125,6 @@ def load_configs() -> tuple[dict, dict]:
             configs[config_name] = json.load(f)
 
     return configs['wallets_config'], configs['modeling_config']
-
-
-def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
-    """
-    Convert YYMMDD offset strings to integer days since date_0, with optional shift.
-
-    Params:
-    - wallets_config (dict): Contains date_0 and offset arrays
-    - shift (int): Days to add to all offsets (for temporal validation)
-
-    Returns:
-    - dict: {'train_offsets': [days], 'eval_offsets': [days], ...}
-    """
-    # Parse reference date
-    date_0_str = str(wallets_config['training_data']['date_0'])
-    date_0 = pd.to_datetime(date_0_str, format='%y%m%d')
-
-    result = {}
-    offset_keys = ['train_offsets', 'eval_offsets', 'test_offsets', 'val_offsets']
-
-    for key in offset_keys:
-        if key in wallets_config['training_data']:
-            date_strings = wallets_config['training_data'][key]
-            offset_days = []
-
-            for date_str in date_strings:
-                date_obj = pd.to_datetime(str(date_str), format='%y%m%d')
-                days_diff = (date_obj - date_0).days + shift
-                offset_days.append(days_diff)
-
-            result[key] = offset_days
-
-    return result
 
 
 def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:

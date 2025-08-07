@@ -116,7 +116,7 @@ def _train_single_period_script_model(
         instance_count=modeling_config['metaparams']['instance_count'],
         role=wallets_config['aws']['modeler_arn'],
         hyperparameters=hp,
-        output_path=output_path
+        output_path=output_path,
     )
 
     # Assemble job name
@@ -326,7 +326,7 @@ def train_temporal_cv_script_model(
         instance_count =    modeling_config['metaparams']['instance_count'],
         role =              wallets_config['aws']['modeler_arn'],
         hyperparameters =   hp,
-        output_path =       output_path
+        output_path =       output_path,
     )
 
     # Prepare CV channel input

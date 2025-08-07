@@ -21,7 +21,7 @@ from sage_wallet_modeling.wallet_modeler import WalletModeler
 # For cross-date CV training
 import sage_wallet_modeling.wallet_script_modeler as sm
 import sage_wallet_insights.model_evaluation as sime
-import script_modeling.entry_helpers as h
+import script_modeling.custom_transforms as ct
 import utils as u
 import sage_utils.config_validation as ucv
 
@@ -1489,7 +1489,7 @@ def calculate_comprehensive_offsets_by_split(wallets_config: dict) -> dict[str, 
 
         # For each shift, get the shifted dates for this specific split
         for shift in epoch_shifts:
-            shifted_offset_ints = h.identify_offset_ints(wallets_config, shift=shift)
+            shifted_offset_ints = ct.identify_offset_ints(wallets_config, shift=shift)
             split_key = split_name  # 'train_offsets', 'eval_offsets', etc.
 
             if split_key in shifted_offset_ints:

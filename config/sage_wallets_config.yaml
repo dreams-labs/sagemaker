@@ -8,7 +8,7 @@ training_data: #SageMaker
 
     # local_directory: dda_945_filters_bal_s  # where to store local artifacts
     # upload_directory: dda-945-filt-bal-s  # new S3 folder name in bucket training_data_processed
-    local_directory: dda_947_x_in_cont_v6  # where to store local artifacts
+    local_directory: dda_947_x_in_cont_v7  # where to store local artifacts
     upload_directory: dda-947-x-in-cont  # new S3 folder name in bucket training_data_processed
 
 
@@ -16,6 +16,13 @@ training_data: #SageMaker
 
     concatenate_offsets: True  # whether to model each offset individually or concat them together
     date_0: '200127' # the date that all offsets will be numbered relative to
+    epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
+        0,
+        30,
+        60,
+        90,
+        120
+    ]
 
     train_offsets: [
         # '200127',
@@ -65,7 +72,7 @@ training_data: #SageMaker
         # '230908',
         # # '231008',
         # '231107',
-        # '231207',
+        # # '231207',
         '240106',
         # '240205',
         '240306',
@@ -118,8 +125,6 @@ training_data: #SageMaker
         '240704',
         '240803',
         '240902',
-
-
     ]
 
 preprocessing: #SageMaker

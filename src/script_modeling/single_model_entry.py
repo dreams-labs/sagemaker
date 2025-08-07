@@ -37,14 +37,22 @@ import custom_transforms as ct
 #                              Helper Functions                               #
 # --------------------------------------------------------------------------- #
 
-def load_data_matrices(config: dict) -> tuple[xgb.DMatrix, xgb.DMatrix]:
+def load_data_matrices(
+    wallets_config: dict,
+    modeling_config: dict,
+    booster_params: dict
+) -> tuple[xgb.DMatrix, xgb.DMatrix]:
     """
+    Load and filter training/validation data, then convert to XGBoost DMatrix format.
+
     Params:
-    - config (dict): modeling configuration loaded from JSON.
+    - wallets_config (dict): wallets configuration loaded from JSON
+    - modeling_config (dict): modeling configuration loaded from JSON
+    - booster_params (dict): XGBoost parameters including epoch_shift
 
     Returns:
-    - training_matrix (DMatrix): training data matrix.
-    - validation_matrix (DMatrix): validation data matrix.
+    - training_matrix (DMatrix): training data matrix
+    - validation_matrix (DMatrix): validation data matrix
     """
     # Load CSVs
     train_x_dir = Path(os.environ["SM_CHANNEL_TRAIN_X"])
@@ -57,17 +65,30 @@ def load_data_matrices(config: dict) -> tuple[xgb.DMatrix, xgb.DMatrix]:
     df_train_y = pd.read_csv(train_y_dir / "train_y.csv")
     df_val_y   = pd.read_csv(val_y_dir   / "eval_y.csv")
 
+    # Apply epoch shift filtering if specified
+    if 'epoch_shift' in booster_params and booster_params['epoch_shift'] is not None:
+        epoch_shift = booster_params['epoch_shift']
+        print(f"Applying epoch shift filtering: {epoch_shift} days")
+
+        df_train_x, df_train_y = ct.select_shifted_offsets(
+            df_train_x, df_train_y, wallets_config, epoch_shift
+        )
+        df_val_x, df_val_y = ct.select_shifted_offsets(
+            df_val_x, df_val_y, wallets_config, epoch_shift
+        )
+
+        print(f"After epoch shift filtering - Train: {len(df_train_x)} rows, Val: {len(df_val_x)} rows")
+
     # Load metadata
     metadata_dir = Path(os.environ["SM_CHANNEL_METADATA"])
     metadata_path = metadata_dir / "metadata.json"
     with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
 
-    training_matrix   = ct.build_custom_dmatrix(df_train_x, df_train_y, config, metadata)
-    validation_matrix = ct.build_custom_dmatrix(df_val_x, df_val_y, config, metadata)
+    training_matrix   = ct.build_custom_dmatrix(df_train_x, df_train_y, modeling_config, metadata)
+    validation_matrix = ct.build_custom_dmatrix(df_val_x, df_val_y, modeling_config, metadata)
 
     return training_matrix, validation_matrix
-
 
 
 # --------------------------------------------------------------------------- #
@@ -97,7 +118,9 @@ def main() -> None:
     modeling_config = ct.apply_cli_filter_overrides(modeling_config, args)
 
     # Load training and validation matrices
-    training_matrix, validation_matrix = load_data_matrices(modeling_config)
+    training_matrix, validation_matrix = load_data_matrices(
+        wallets_config, modeling_config, booster_params
+    )
 
     # Load raw validation targets and pick custom eval function
     val_y_dir = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
