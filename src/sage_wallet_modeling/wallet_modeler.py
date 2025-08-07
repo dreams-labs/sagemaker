@@ -161,7 +161,7 @@ class WalletModeler:
         job_name = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-{timestamp}"
 
         u.notify('logo_sci_fi_warm_swell')
-        logger.info(f"Launching training job: {job_name}")
+        logger.milestone(f"Launching training job: {job_name}")
         logger.info(f"Model output parent directory: {model_output_path}")
 
         xgb_estimator.fit(
@@ -177,7 +177,7 @@ class WalletModeler:
         self.model_uri = xgb_estimator.model_data
         self._upload_training_artifacts(job_name)
 
-        logger.info(f"Training completed. Model stored at: {self.model_uri}")
+        logger.milestone(f"Training completed. Model stored at: {self.model_uri}")
         u.notify('mellow_chime_005')
 
         return {
