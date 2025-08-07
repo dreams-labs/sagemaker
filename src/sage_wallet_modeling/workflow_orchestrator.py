@@ -204,7 +204,7 @@ class WalletWorkflowOrchestrator:
 
 
     @u.timing_decorator
-    def concatenate_all_preprocessed_data(self) -> None:
+    def concatenate_all_preprocessed_data(self, repreprocess_offsets: bool = True) -> None:
         """
         Concatenate preprocessed CSVs across configured offsets for each split and
         save combined CSVs to the concatenated output directory.
@@ -214,12 +214,16 @@ class WalletWorkflowOrchestrator:
 
         Exports separate y-files for test and val splits using RAW (non-preprocessed)
         y values for evaluation purposes.
+        :param bool repreprocess_offsets: if False, skip re-running preprocessing and load existing CSVs.
         """
-        logger.info("Beginning concatenation of preprocessed data...")
-
         # Preprocess all data from scratch to ensure temporal filtering is applied
-        data_by_date = self.preprocess_all_training_data()
+        if repreprocess_offsets:
+            data_by_date = self.preprocess_all_training_data()
+        else:
+            # Skip reprocessing and load saved preprocessed CSVs
+            data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
 
+        logger.info("Beginning concatenation of preprocessed data...")
         # Determine offsets for each split from config
         offsets_map = {
             'train': self.wallets_config['training_data'].get('train_offsets', []),
@@ -257,7 +261,11 @@ class WalletWorkflowOrchestrator:
                 logger.warning(f"No data found for split '{split}' across offsets {offsets}")
                 continue
 
+            # Validate no NaNs before saving
             concatenated = pd.concat(dfs, ignore_index=True)
+            if concatenated.isnull().any().any():
+                raise ValueError(f"NaN values detected in {split} split before saving to CSV")
+
             out_file = concat_base / f"{split}.csv"
             concatenated.to_csv(out_file, index=False, header=False)
             logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")

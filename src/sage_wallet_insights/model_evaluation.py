@@ -149,6 +149,7 @@ def create_sagemaker_evaluator(
 def create_concatenated_sagemaker_evaluator(
     wallets_config: dict,
     modeling_config: dict,
+    model_uri: str,
     y_test_pred: pd.Series,
     y_test: pd.DataFrame,
     y_val_pred: pd.Series = None,
@@ -160,6 +161,7 @@ def create_concatenated_sagemaker_evaluator(
     Params:
     - wallets_config (dict): Configuration for training data paths
     - modeling_config (dict): Configuration for model parameters
+    - model_uri (str): Used as model_id
     - y_test_pred (Series): Predicted values for the concatenated test set
     - y_test (DataFrame): Single-column actual target for the concatenated test set
     - y_val_pred (Series, optional): Predicted values for validation set
@@ -185,16 +187,10 @@ def create_concatenated_sagemaker_evaluator(
     y_val_series = y_val_final if validation_provided else None
     y_val_pred = y_val_pred_final if validation_provided else None
 
-    # Prepare validation placeholders
-    X_validation = None
-    y_validation = None
-    if validation_provided:
-        X_validation = None
-        y_validation = y_val_series
-
     # Build modeling config for evaluator
     wime_modeling_config = {
         "target_variable": target_var,
+        "target_var_min_threshold": modeling_config['target']['classification']['threshold'],
         "model_type": modeling_config["training"]["model_type"],
         "returns_winsorization": 0.005,
         "training_data": {"modeling_period_duration": 30},
@@ -221,8 +217,6 @@ def create_concatenated_sagemaker_evaluator(
             y_val_pred_proba = y_val_pred.copy()
             y_val_pred_binary = (y_val_pred > threshold).astype(int)
 
-    model_id = f"sagemaker_concat_{wallets_config['training_data']['local_directory']}"
-
     # Remove "y_val" (raw DataFrame), use only "y_validation"
     # Update key: "y_val_pred" -> "y_validation_pred"
     if model_type == "classification":
@@ -231,7 +225,7 @@ def create_concatenated_sagemaker_evaluator(
         y_validation_pred = y_val_pred if validation_provided else None
 
     wallet_model_results = {
-        "model_id": model_id,
+        "model_id": model_uri,
         "modeling_config": wime_modeling_config,
         "model_type": model_type,
         "X_train": X_train,
@@ -241,8 +235,8 @@ def create_concatenated_sagemaker_evaluator(
         "y_pred": y_pred,
         "training_cohort_pred": None,
         "training_cohort_actuals": None,
-        "X_validation": X_validation,
-        "y_validation": y_validation,
+        "X_validation": X_val_final,
+        "y_validation": y_val_series,
         "validation_target_vars_df": y_val,
         "y_validation_pred": y_validation_pred,
         "pipeline": create_mock_pipeline(model_type)

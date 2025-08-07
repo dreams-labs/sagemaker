@@ -39,6 +39,7 @@ class TrainingDataConfig(BaseModel):
     upload_directory: str = Field(...)
     dataset: str = Field(...)
     concatenate_offsets: bool = Field(...)
+    date_0: int = Field(...)
     train_offsets: List[str] = Field(...)
     eval_offsets: List[str] = Field(...)
     test_offsets: List[str] = Field(...)
