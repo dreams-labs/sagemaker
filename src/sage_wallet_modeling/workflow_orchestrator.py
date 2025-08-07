@@ -21,6 +21,7 @@ from sage_wallet_modeling.wallet_modeler import WalletModeler
 # For cross-date CV training
 import sage_wallet_modeling.wallet_script_modeler as sm
 import sage_wallet_insights.model_evaluation as sime
+import script_modeling.custom_transforms as ct
 import utils as u
 import sage_utils.config_validation as ucv
 
@@ -73,8 +74,7 @@ class WalletWorkflowOrchestrator:
     # ------------------------
 
     def load_all_training_data(
-        self,
-        date_suffixes: list = None
+        self
         ):
         """
         Load training data for multiple prediction period dates, maintaining separate
@@ -83,10 +83,6 @@ class WalletWorkflowOrchestrator:
         Files are loaded from wallets_config.training_data.local_directory. Each date
         suffix represents a distinct modeling period with its own train/test/eval/val
         splits that should be processed independently.
-
-        Params:
-        - date_suffixes (list, optional): List of date suffixes (e.g., ["250301", "250401"])
-                                        If None, auto-detects from config offset settings
 
         Returns:
         - Sets self.training_data to nested dict structure:
@@ -105,18 +101,18 @@ class WalletWorkflowOrchestrator:
         Note: Each date suffix maintains independent data splits. Offset records have
         already been merged upstream, so no concatenation occurs at this stage.
         """
-        # Auto-detect date_suffixes from config if not provided
-        if date_suffixes is None:
-            train_offsets = self.wallets_config['training_data'].get('train_offsets', [])
-            eval_offsets = self.wallets_config['training_data'].get('eval_offsets', [])
-            test_offsets = self.wallets_config['training_data'].get('test_offsets', [])
-            val_offsets = self.wallets_config['training_data'].get('val_offsets', [])
+        # Auto-detect date_suffixes from config
+        split_requirements = calculate_comprehensive_offsets_by_split(self.wallets_config)
+        train_offsets = split_requirements['all_train_offsets']
+        eval_offsets = split_requirements['all_eval_offsets']
+        test_offsets = split_requirements['all_test_offsets']
+        val_offsets = split_requirements['all_val_offsets']
 
-            # Combine all offsets and remove duplicates while preserving order
-            all_offsets = train_offsets + eval_offsets + test_offsets + val_offsets
-            date_suffixes = list(dict.fromkeys(all_offsets))  # Removes duplicates, preserves order
+        # Combine all offsets and remove duplicates while preserving order
+        all_offsets = train_offsets + eval_offsets + test_offsets + val_offsets
+        date_suffixes = list(dict.fromkeys(all_offsets))  # Removes duplicates, preserves order
 
-            logger.info(f"Auto-detected date_suffixes from config: {date_suffixes}")
+        logger.info(f"Auto-detected date_suffixes from config: {date_suffixes}")
 
         # Data location validation with dataset suffix
         load_folder = self.wallets_config['training_data']['training_data_directory']
@@ -225,11 +221,13 @@ class WalletWorkflowOrchestrator:
 
         logger.info("Beginning concatenation of preprocessed data...")
         # Determine offsets for each split from config
+        split_requirements = calculate_comprehensive_offsets_by_split(self.wallets_config)
+
         offsets_map = {
-            'train': self.wallets_config['training_data'].get('train_offsets', []),
-            'eval':  self.wallets_config['training_data'].get('eval_offsets', []),
-            'test':  self.wallets_config['training_data'].get('test_offsets', []),
-            'val':   self.wallets_config['training_data'].get('val_offsets', []),
+            'train': split_requirements['all_train_offsets'],
+            'eval':  split_requirements['all_eval_offsets'],
+            'test':  split_requirements['all_test_offsets'],
+            'val':   split_requirements['all_val_offsets']
         }
 
         # Build concatenation output directory alongside the preprocessed tree
@@ -1455,3 +1453,77 @@ class WalletWorkflowOrchestrator:
 
         logger.milestone(f"Successfully completed predictions for {date_suffix}: {list(dataset_types)}")
         return prediction_results
+
+
+# ---------------------------------
+#         Utility Functions
+# ---------------------------------
+
+def calculate_comprehensive_offsets_by_split(wallets_config: dict) -> dict[str, list[str]]:
+    """
+    Calculate date suffixes needed for each split across all epoch shifts.
+
+    Params:
+    - wallets_config (dict): Wallets configuration
+
+    Returns:
+    - dict: Split-specific date requirements
+        {
+            'all_train_offsets': ['220615', '220715', ...],
+            'all_eval_offsets': ['230809', '230908', ...],
+            'all_test_offsets': ['230809', '230908', ...],
+            'all_val_offsets': ['240405', '240505', ...]
+        }
+    """
+    epoch_shifts = wallets_config['training_data'].get('epoch_shifts', [0])
+    base_splits = ['train_offsets', 'eval_offsets', 'test_offsets', 'val_offsets']
+
+    result = {}
+
+    for split_name in base_splits:
+        if split_name not in wallets_config['training_data']:
+            result[f'all_{split_name}'] = []
+            continue
+
+        split_dates = set()
+
+        # For each shift, get the shifted dates for this specific split
+        for shift in epoch_shifts:
+            shifted_offset_ints = ct.identify_offset_ints(wallets_config, shift=shift)
+            split_key = split_name  # 'train_offsets', 'eval_offsets', etc.
+
+            if split_key in shifted_offset_ints:
+                shifted_dates = convert_offset_ints_to_dates(
+                    shifted_offset_ints[split_key],
+                    wallets_config
+                )
+                split_dates.update(shifted_dates)
+
+        result[f'all_{split_name}'] = sorted(list(split_dates))
+
+    return result
+
+
+def convert_offset_ints_to_dates(offset_days: list[int], wallets_config: dict) -> list[str]:
+    """
+    Convert integer days since date_0 back to YYMMDD date strings.
+
+    Params:
+    - offset_days (list[int]): List of days since date_0 (e.g., [30, 60, 90])
+    - wallets_config (dict): Contains date_0 reference date
+
+    Returns:
+    - list[str]: YYMMDD date strings (e.g., ['200226', '200327', '200426'])
+    """
+    # Parse reference date
+    date_0_str = str(wallets_config['training_data']['date_0'])
+    date_0 = pd.to_datetime(date_0_str, format='%y%m%d')
+
+    date_strings = []
+    for days in offset_days:
+        target_date = date_0 + pd.Timedelta(days=days)
+        # Convert back to YYMMDD format
+        date_string = target_date.strftime('%y%m%d')
+        date_strings.append(date_string)
+
+    return date_strings

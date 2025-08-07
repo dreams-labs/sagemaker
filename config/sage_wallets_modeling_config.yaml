@@ -5,8 +5,9 @@ framework:
 
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
+    instance_type: local
     # instance_type: ml.m5.2xlarge
-    instance_type: ml.m6i.2xlarge
+    # instance_type: ml.m6i.2xlarge
     # instance_type: ml.c5.9xlarge
     # instance_type: ml.c6i.4xlarge
     instance_count: 1
@@ -82,6 +83,9 @@ training:
         alpha: 5   # 0 to disable
         lambda: 5  # 1 to disable
         gamma: 0.3
+
+        # epoch shift
+        epoch_shift: 0
 
     # KeyParam HPO Tuning
     hpo:  # Hyperparameter Optimization

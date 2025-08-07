@@ -1,4 +1,6 @@
+import os
 import sys
+import json
 import argparse
 from pathlib import Path
 import pandas as pd
@@ -34,6 +36,7 @@ def get_valid_hyperparameters(modeling_config) -> dict:
         'lambda': float,
         'gamma': float,
         'threshold': float,
+        'epoch_shift': int
     }
 
     # Add dynamic filter parameters if config provided
@@ -90,6 +93,38 @@ def load_hyperparams(modeling_config: dict) -> argparse.Namespace:
                 parser.add_argument(f"--{name}", type=typ, required=True)
 
     return parser.parse_args()
+
+
+def load_configs() -> tuple[dict, dict]:
+    """
+    Load wallets_config and modeling_config from SageMaker mounted channels.
+
+    Returns:
+    - tuple: (wallets_config, modeling_config)
+    """
+    config_files = {
+        'wallets_config': {
+            'env_var': 'SM_CHANNEL_WALLETS_CONFIG',
+            'filename': 'wallets_config.json'
+        },
+        'modeling_config': {
+            'env_var': 'SM_CHANNEL_MODELING_CONFIG',
+            'filename': 'modeling_config.json'
+        }
+    }
+
+    configs = {}
+    for config_name, config_info in config_files.items():
+        config_dir = Path(os.environ[config_info['env_var']])
+        config_path = config_dir / config_info['filename']
+
+        if not config_path.exists():
+            raise FileNotFoundError(f"{config_name} file not found at {config_path}")
+
+        with open(config_path, "r", encoding='utf-8') as f:
+            configs[config_name] = json.load(f)
+
+    return configs['wallets_config'], configs['modeling_config']
 
 
 def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
