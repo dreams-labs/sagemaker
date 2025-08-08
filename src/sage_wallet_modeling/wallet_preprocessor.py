@@ -392,6 +392,18 @@ class SageWalletsPreprocessor:
         if not hasattr(self, 'date_suffix') or not self.date_suffix:
             raise ValueError("date_suffix must be set before saving preprocessed data")
 
+         # Guard: do not write files with NaNs
+        if df.isnull().values.any():
+            cols_with_na = df.columns[df.isnull().any()].tolist()
+            logger.error(
+                "NaN values detected in preprocessed '%s' split; columns with NaNs: %s",
+                split_name, cols_with_na
+            )
+            raise ValueError(
+                f"Cannot save preprocessed '{split_name}' split: NaN values present in "
+                f"columns {cols_with_na}"
+            )
+
         # Create date-specific folder structure matching S3 upload pattern
         date_folder = self.output_base / self.date_suffix
         date_folder.mkdir(exist_ok=True)
