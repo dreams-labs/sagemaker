@@ -10,7 +10,7 @@ import pandas as pd
 # ensure script_modeling directory is on path for its module
 script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
 sys.path.insert(0, str(script_modeling_dir))
-from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels
+from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels, select_shifted_offsets
 
 # Import from data-science repo
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
@@ -152,7 +152,8 @@ def create_concatenated_sagemaker_evaluator(
     y_test_pred: pd.Series,
     y_test: pd.DataFrame,
     y_val_pred: pd.Series = None,
-    y_val: pd.DataFrame = None
+    y_val: pd.DataFrame = None,
+    epoch_shift: int = 0
 ) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
     """
     Create a SageMaker evaluator for concatenated model results with optional validation set.
@@ -165,6 +166,7 @@ def create_concatenated_sagemaker_evaluator(
     - y_test (DataFrame): Single-column actual target for the concatenated test set
     - y_val_pred (Series, optional): Predicted values for validation set
     - y_val (DataFrame, optional): Single-column actual target for the validation set
+    - epoch_shift (int, optional): How many days to shift the base offsets in wallets_config
 
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
@@ -172,7 +174,7 @@ def create_concatenated_sagemaker_evaluator(
     # Apply custom transforms and get filtered data
     y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
         _apply_custom_transforms_to_concatenated_data(
-            wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val
+            wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val, epoch_shift
         )
 
     # For custom transforms, we still need to load train data normally
@@ -252,33 +254,65 @@ def create_concatenated_sagemaker_evaluator(
     else:
         return wime.ClassifierEvaluator(wallet_model_results)
 
+
 # --------------------------
 #      Helper Functions
 # --------------------------
 
-
-def _validate_and_align_single_target(
-    y_df: pd.DataFrame,
+def _process_concatenated_split(
+    split: str,
+    wallets_config: dict,
+    modeling_config: dict,
+    data_path: Path,
+    metadata: dict,
     y_pred: pd.Series,
-    target_var: str = None
-) -> Tuple[str, pd.Series, pd.Series]:
+    y_df: pd.DataFrame,
+    epoch_shift: int
+) -> Tuple[pd.Series, pd.DataFrame, pd.Series]:
     """
-    Validate that y_df is a single-column DataFrame, rename its Series to the column name
-    (or use provided target_var), and align y_pred index to the Series index.
+    Common processing for 'test' and 'val':
+    1) Epoch-offset selection via select_shifted_offsets
+    2) Custom X filtering via apply_custom_feature_filters
+    3) Align y and y_pred with masks; labels already preprocessed upstream.
+    """
+    # Load raw features (first column is offset_date; no headers)
+    X_full = pd.read_csv(data_path / f"{split}.csv", header=None)
 
-    Returns:
-    - target_var (str): name of the target variable
-    - y_series (pd.Series): validated target series
-    - y_pred_aligned (pd.Series): predictions with aligned index
-    """
-    if not isinstance(y_df, pd.DataFrame) or y_df.shape[1] != 1:
-        raise ValueError("Expected a single-column DataFrame for target data")
-    series = y_df.iloc[:, 0]
-    if target_var is None:
-        target_var = y_df.columns[0]
-    series = series.rename(target_var)
-    y_pred_aligned = pd.Series(y_pred.values, index=series.index)
-    return target_var, series, y_pred_aligned
+    # Sanity checks
+    if len(X_full) != len(y_df):
+        raise ValueError(f"{split}: features rows ({len(X_full)}) must match y rows ({len(y_df)})")
+    if len(X_full) != len(y_pred):
+        raise ValueError(f"{split}: features rows ({len(X_full)}) must match y_pred rows ({len(y_pred)})")
+
+    # 1) Epoch-offset filtering
+    X_epoch, y_epoch = select_shifted_offsets(
+        X_full, y_df, wallets_config, epoch_shift, split
+    )
+    # For predictions, wrap as a DataFrame to reuse the same function
+    _, y_pred_epoch_df = select_shifted_offsets(
+        X_full, y_pred.to_frame("__pred__"), wallets_config, epoch_shift, split
+    )
+    y_pred_epoch = y_pred_epoch_df["__pred__"].reset_index(drop=True)
+
+    # 2) Custom feature filtering
+    X_filtered, row_mask = apply_custom_feature_filters(X_epoch, metadata, modeling_config)
+
+    # 3) Align y and preds with the filter mask
+    y_filtered = y_epoch[row_mask].reset_index(drop=True)
+    y_pred_filtered = y_pred_epoch[row_mask].reset_index(drop=True)
+
+    # y was already processed by load_concatenated_y(); just rename for clarity
+    target_var = modeling_config['target']['target_var']
+    y_final = y_filtered.iloc[:, 0].rename(target_var)
+
+    if not (len(X_filtered) == len(y_final) == len(y_pred_filtered)):
+        raise ValueError(
+            f"{split}: post-filter length mismatch "
+            f"(X={len(X_filtered)}, y={len(y_final)}, y_pred={len(y_pred_filtered)})"
+        )
+
+    return y_final, X_filtered, y_pred_filtered
+
 
 
 # Helper to load concatenated train/test features and y_train, and rename columns
@@ -436,28 +470,22 @@ def _apply_custom_transforms_to_concatenated_data(
     y_test_pred: pd.Series,
     y_test: pd.DataFrame,
     y_val_pred: pd.Series = None,
-    y_val: pd.DataFrame = None
+    y_val: pd.DataFrame = None,
+    epoch_shift: int = 0
 ) -> Tuple[pd.Series, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
     """
-    Apply custom X and y transforms to concatenated data, returning filtered datasets.
-
-    Params:
-    - wallets_config (dict): Configuration for training data paths
-    - modeling_config (dict): Configuration with custom transform settings
-    - y_test_pred (Series): Raw test predictions
-    - y_test (DataFrame): Raw test targets
-    - y_val_pred (Series, optional): Raw validation predictions
-    - y_val (DataFrame, optional): Raw validation targets
+    Apply epoch-offset selection and custom feature filters to concatenated data for BOTH
+    'test' and 'val'. Validation data must be provided.
 
     Returns:
-    - y_test_final (Series): Transformed test targets
-    - X_test_final (DataFrame): Filtered test features
-    - y_test_pred_final (Series): Filtered test predictions
-    - y_val_final (Series): Transformed val targets (if provided)
-    - X_val_final (DataFrame): Filtered val features (if provided)
-    - y_val_pred_final (Series): Filtered val predictions (if provided)
+    - y_test_final (Series)
+    - X_test_final (DataFrame)
+    - y_test_pred_final (Series)
+    - y_val_final (Series)
+    - X_val_final (DataFrame)
+    - y_val_pred_final (Series)
     """
-    # Load metadata and data paths
+    # Resolve paths
     base_dir = Path(wallets_config["training_data"]["local_s3_root"])
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
     local_dir = wallets_config["training_data"]["local_directory"]
@@ -470,52 +498,20 @@ def _apply_custom_transforms_to_concatenated_data(
     with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
 
-    # Load test features
-    test_df = pd.read_csv(data_path / "test.csv", header=None)
+    # Require validation inputs so both splits follow the identical path
+    if y_val is None or y_val_pred is None:
+        raise ValueError("Validation data (y_val and y_val_pred) must be provided.")
 
-    # Apply custom X filtering to test data
-    test_df_filtered, test_mask = apply_custom_feature_filters(test_df, metadata, modeling_config)
+    # Process splits identically
+    y_test_final, X_test_final, y_test_pred_final = _process_concatenated_split(
+        "test", wallets_config, modeling_config, data_path, metadata,
+        y_test_pred, y_test, epoch_shift
+    )
 
-    # Apply same mask to test predictions and targets
-    if len(test_mask) != len(y_test_pred):
-        raise ValueError(f"Test mask length ({len(test_mask)}) doesn't match predictions length ({len(y_test_pred)})")
-
-    y_test_pred_final = y_test_pred[test_mask].reset_index(drop=True)
-    y_test_filtered = y_test[test_mask].reset_index(drop=True)
-    X_test_final = test_df_filtered
-
-    # Apply custom y transforms to test data
-    y_test_processed = preprocess_custom_labels(y_test_filtered, modeling_config)
-    target_var = modeling_config['target']['target_var']
-    y_test_final = pd.Series(y_test_processed, name=target_var)
-
-    # Handle validation data if provided
-    y_val_final = None
-    X_val_final = None
-    y_val_pred_final = None
-
-    if y_val is not None and y_val_pred is not None:
-        # Load validation features from concatenated data
-        val_csv_path = data_path / "val.csv"
-        if not val_csv_path.exists():
-            raise FileNotFoundError(f"Validation features not found at {val_csv_path}")
-
-        val_df = pd.read_csv(val_csv_path, header=None)
-
-        # Apply custom X filtering to validation data
-        val_df_filtered, val_mask = apply_custom_feature_filters(val_df, metadata, modeling_config)
-
-        # Apply same mask to validation predictions and targets
-        if len(val_mask) != len(y_val_pred):
-            raise ValueError(f"Val mask length ({len(val_mask)}) doesn't match predictions length ({len(y_val_pred)})")
-
-        y_val_pred_final = y_val_pred[val_mask].reset_index(drop=True)
-        y_val_filtered = y_val[val_mask].reset_index(drop=True)
-        X_val_final = val_df_filtered
-
-        # Apply custom y transforms to validation data
-        y_val_processed = preprocess_custom_labels(y_val_filtered, modeling_config)
-        y_val_final = pd.Series(y_val_processed, name=target_var)
+    y_val_final, X_val_final, y_val_pred_final = _process_concatenated_split(
+        "val", wallets_config, modeling_config, data_path, metadata,
+        y_val_pred, y_val, epoch_shift
+    )
 
     return y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final
 
