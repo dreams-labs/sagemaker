@@ -118,9 +118,6 @@ class WalletWorkflowOrchestrator:
         # Data location validation with dataset suffix
         load_folder = self.wallets_config['training_data']['training_data_directory']
 
-        if self.dataset == 'dev':
-            load_folder = f"{load_folder}_dev"
-
         self.data_folder = Path('../s3_uploads') / 'wallet_training_data_queue' / load_folder
         self._validate_data_folder()
 
@@ -236,8 +233,6 @@ class WalletWorkflowOrchestrator:
                 / "s3_uploads" \
                 / "wallet_training_data_concatenated"
         local_dir = self.wallets_config["training_data"]["local_directory"]
-        if self.dataset == 'dev':
-            local_dir = f"{local_dir}_dev"
         concat_base = base_dir / local_dir
         concat_base.mkdir(parents=True, exist_ok=True)
 
@@ -367,8 +362,6 @@ class WalletWorkflowOrchestrator:
         # Use configured concatenated directory
         base_folder = self.wallets_config['aws']['concatenated_directory']
         upload_directory = self.wallets_config['training_data']['upload_directory']
-        if self.dataset == 'dev':
-            upload_directory = f"{upload_directory}-dev"
         folder_prefix = f"{upload_directory}/"
 
         s3_client = boto3.client('s3')
@@ -379,8 +372,6 @@ class WalletWorkflowOrchestrator:
                       / "s3_uploads" \
                       / "wallet_training_data_concatenated"
         local_dir = self.wallets_config["training_data"]["local_directory"]
-        if self.dataset == 'dev':
-            local_dir = f"{local_dir}_dev"
         concat_dir = concat_root / local_dir
 
         logger.info(f"Beginning upload of concatenated training data for splits {splits}...")
@@ -1134,8 +1125,6 @@ class WalletWorkflowOrchestrator:
                     / "s3_uploads"
                     / "wallet_training_data_preprocessed")
         local_dir = self.wallets_config["training_data"]["local_directory"]
-        if self.dataset == 'dev':
-            local_dir = f"{local_dir}_dev"
         preprocessed_dir = base_dir / local_dir
 
         splits = ['train', 'test', 'eval', 'val']
@@ -1358,11 +1347,6 @@ class WalletWorkflowOrchestrator:
             base_folder = self.wallets_config['aws']['preprocessed_directory']
 
         upload_directory = self.wallets_config['training_data']['upload_directory']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            upload_directory = f"{upload_directory}-dev"
-
         folder_prefix = f"{upload_directory}/"
 
         return bucket_name, base_folder, folder_prefix

@@ -22,8 +22,6 @@ import pandas as pd
 import boto3
 from botocore.exceptions import ClientError
 import sagemaker
-from sagemaker.estimator import Estimator
-from sagemaker.inputs import TrainingInput
 from sagemaker.model import Model
 from sagemaker.transformer import Transformer
 from sagemaker.predictor import Predictor
@@ -87,12 +85,8 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
-        # Store dataset and upload folder as instance state
-        self.dataset = wallets_config['training_data'].get('dataset', 'dev')
-        base_upload_directory = wallets_config['training_data']['upload_directory']
-        if self.dataset == 'dev':
-            base_upload_directory = f"{base_upload_directory}-dev"
-        self.upload_directory = base_upload_directory
+        # Store upload folder as instance state
+        self.upload_directory = wallets_config['training_data']['upload_directory']
 
         # Model artifacts
         self.model_uri = None
@@ -409,10 +403,6 @@ class WalletModeler:
 
         # Create models directory matching training data structure
         load_folder = self.wallets_config['training_data']['local_directory']
-        dataset = self.wallets_config['training_data'].get('dataset', 'prod')
-
-        if dataset == 'dev':
-            load_folder = f"{load_folder}_dev"
 
         models_dir = Path('../models') / load_folder
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -555,9 +545,8 @@ class WalletModeler:
          model already exists there.
         """
         # Create descriptive model output path
-        dataset_str = 'dev' if self.wallets_config['training_data']['dataset'] == 'dev' else 'prod'
         model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
-                             f"sagemaker-models/{self.upload_directory}{dataset_str}/")
+                             f"sagemaker-models/{self.upload_directory}/")
 
         # Check if model output path already exists
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -621,8 +610,6 @@ class WalletModeler:
                     / "wallet_training_data_preprocessed")
 
         local_dir = self.wallets_config["training_data"]["local_directory"]
-        if self.dataset == 'dev':
-            local_dir = f"{local_dir}_dev"
 
         metadata_path = base_dir / local_dir / self.date_suffix / "metadata.json"
 
@@ -651,7 +638,7 @@ class WalletModeler:
                 "training_job_name": training_job_name,
                 "date_suffix": self.date_suffix,
                 "model_uri": self.model_uri,
-                "dataset": self.dataset,
+                "dataset": self.wallets_config['training_data']['dataset'],
                 "upload_directory": self.upload_directory,
                 "training_completed_at": timestamp,
                 "sagemaker_framework_version": self.modeling_config['framework']['version'],
@@ -840,10 +827,9 @@ class WalletModeler:
         - str: Local file path where predictions were downloaded
         """
         # Construct standardized local path
-        data_suffix = '_dev' if self.wallets_config['training_data']['dataset'] == 'dev' else ''
         local_path = (f"{self.wallets_config['training_data']['local_s3_root']}/"
                       f"s3_downloads/wallet_predictions/"
-                      f"{self.wallets_config['training_data']['local_directory']}{data_suffix}/"
+                      f"{self.wallets_config['training_data']['local_directory']}/"
                       f"{self.date_suffix}/"
                       f"{dataset_type}.csv.out")
 
