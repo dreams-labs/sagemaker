@@ -176,7 +176,7 @@ def create_concatenated_sagemaker_evaluator(
         )
 
     # For custom transforms, we still need to load train data normally
-    y_train, X_train, _ = _load_concatenated_features(wallets_config, modeling_config)
+    y_train, X_train, _ = _load_concatenated_features(wallets_config)
     target_var = y_test_final.name
     y_test_series = y_test_final
     y_test_pred = y_test_pred_final
@@ -283,8 +283,7 @@ def _validate_and_align_single_target(
 
 # Helper to load concatenated train/test features and y_train, and rename columns
 def _load_concatenated_features(
-    wallets_config: Dict,
-    modeling_config: Dict
+    wallets_config: Dict
 ) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
     """
     Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
