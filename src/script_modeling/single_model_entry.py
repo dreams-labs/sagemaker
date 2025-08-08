@@ -71,10 +71,10 @@ def load_data_matrices(
         print(f"Applying epoch shift filtering: {epoch_shift} days")
 
         df_train_x, df_train_y = ct.select_shifted_offsets(
-            df_train_x, df_train_y, wallets_config, epoch_shift
+            df_train_x, df_train_y, wallets_config, epoch_shift, 'train'
         )
         df_val_x, df_val_y = ct.select_shifted_offsets(
-            df_val_x, df_val_y, wallets_config, epoch_shift
+            df_val_x, df_val_y, wallets_config, epoch_shift, 'eval'
         )
 
         print(f"After epoch shift filtering - Train: {len(df_train_x)} rows, Val: {len(df_val_x)} rows")
