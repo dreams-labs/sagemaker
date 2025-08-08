@@ -31,6 +31,14 @@ def load_sage_wallets_config(config_path: str) -> dict:
         with open(config_path, 'r', encoding='utf-8') as file:
             raw_config = yaml.safe_load(file)
 
+        if raw_config['training_data']['dataset'] == 'dev':
+            base_td_dir = raw_config['training_data']['training_data_directory']
+            base_local_dir = raw_config['training_data']['local_directory']
+            base_upload_dir = raw_config['training_data']['upload_directory']
+            raw_config['training_data']['training_data_directory'] = f"{base_td_dir}_dev"
+            raw_config['training_data']['local_directory'] = f"{base_local_dir}_dev"
+            raw_config['training_data']['upload_directory'] = f"{base_upload_dir}-dev"
+
         return validate_sage_wallets_config(raw_config)
 
     except FileNotFoundError as e:

@@ -10,7 +10,6 @@ import pandas as pd
 # ensure script_modeling directory is on path for its module
 script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
 sys.path.insert(0, str(script_modeling_dir))
-from sage_wallet_modeling.wallet_preprocessor import SageWalletsPreprocessor
 from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels
 
 # Import from data-science repo
@@ -299,8 +298,6 @@ def _load_concatenated_features(
     base_dir = Path(wallets_config['training_data']['local_s3_root'])
     concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
     local_dir = wallets_config['training_data']['local_directory']
-    if wallets_config['training_data'].get('dataset', 'dev') == 'dev':
-        local_dir = f"{local_dir}_dev"
     data_path = concat_dir / local_dir
 
     X_train = pd.read_csv(data_path / 'train.csv', header=None)
@@ -380,12 +377,11 @@ def load_bt_sagemaker_predictions(
     - predictions_series (Series): Raw predictions without index alignment
     """
     # Load predictions
-    data_suffix = '_dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
     pred_path = (
         Path(f"{wallets_config['training_data']['local_s3_root']}")
         / "s3_downloads"
         / "wallet_predictions"
-        / f"{wallets_config['training_data']['local_directory']}{data_suffix}"
+        / f"{wallets_config['training_data']['local_directory']}"
         / f"{date_suffix}"
         / f"{data_type}.csv.out"
     )
@@ -416,10 +412,9 @@ def load_concatenated_y(
     Returns:
     - target_series (pd.Series): Series of target values loaded from CSV.
     """
-    data_suffix = '_dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
     base_dir = Path(wallets_config['training_data']['local_s3_root'])
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
-    local_dir = f"{wallets_config['training_data']['local_directory']}{data_suffix}"
+    local_dir = f"{wallets_config['training_data']['local_directory']}"
     data_path = concat_dir / local_dir
     csv_path = data_path / f"{data_type}_y.csv"
 
@@ -467,8 +462,6 @@ def _apply_custom_transforms_to_concatenated_data(
     base_dir = Path(wallets_config["training_data"]["local_s3_root"])
     concat_dir = base_dir / "s3_uploads" / "wallet_training_data_concatenated"
     local_dir = wallets_config["training_data"]["local_directory"]
-    if wallets_config["training_data"].get("dataset", "dev") == "dev":
-        local_dir = f"{local_dir}_dev"
     data_path = concat_dir / local_dir
 
     # Load metadata for transforms

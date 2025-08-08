@@ -68,7 +68,7 @@ class TrainingDataConfig(BaseModel):
             raise ValueError(f"Invalid upload_directory value '{v}' contains underscores. "
                               "AWS syntax requires the use of hyphens instead of underscores.")
 
-        if len(v) > 20:
+        if len(v.replace('-dev','')) > 20:
             raise ValueError(f"'upload_directory' exceeds 20 characters (got {len(v)}): '{v}'")
 
         return v
