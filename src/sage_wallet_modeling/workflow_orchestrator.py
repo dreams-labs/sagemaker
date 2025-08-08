@@ -19,6 +19,7 @@ from sage_wallet_modeling.wallet_modeler import WalletModeler
 # For cross-date CV training
 import script_modeling.custom_transforms as ct
 import utils as u
+from utils import ConfigError
 import sage_utils.config_validation as ucv
 
 # Set up logger at the module level
@@ -600,6 +601,57 @@ class WalletWorkflowOrchestrator:
         return s3_uris
 
 
+    def predict_all_epoch_shifts(self) -> dict[int, dict]:
+        """
+        Generate predictions for all epoch shift models using concatenated test/val data.
+        Runs predictions in parallel across epoch shifts.
+
+        Returns:
+        - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}}
+        """
+        epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
+        n_threads = self.wallets_config['n_threads']['predict_all_models']
+
+        if not epoch_shifts:
+            raise ConfigError("No epoch_shifts configured in wallets_config")
+
+        # Load concatenated data URIs once
+        concat_uris = self.retrieve_training_data_uris(['concat'])
+
+        logger.milestone(f"Starting predictions for {len(epoch_shifts)} epoch shifts "
+                        f"using {n_threads} threads...")
+
+        prediction_results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            # Submit all epoch shift predictions
+            future_to_shift = {
+                executor.submit(
+                    self._predict_single_epoch_shift,
+                    epoch_shift,
+                    concat_uris
+                ): epoch_shift
+                for epoch_shift in epoch_shifts
+            }
+
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                try:
+                    result = future.result()
+                    prediction_results[shift] = result
+                    logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
+                except Exception as e:
+                    logger.error(f"✗ Failed predictions for epoch_shift={shift}: {e}")
+                    prediction_results[shift] = {'error': str(e)}
+
+        # Summary
+        successful = len([r for r in prediction_results.values() if 'error' not in r])
+        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(epoch_shifts)} successful")
+
+        return prediction_results
+
+
 
     # ------------------------
     #      Helper Methods
@@ -888,6 +940,50 @@ class WalletWorkflowOrchestrator:
         folder_prefix = f"{upload_directory}/"
 
         return bucket_name, base_folder, folder_prefix
+
+
+    def _predict_single_epoch_shift(self, epoch_shift: int, concat_uris: dict) -> dict:
+        """
+        Helper to predict test and val for a single epoch shift.
+
+        Params:
+        - epoch_shift (int): The epoch shift value
+        - concat_uris (dict): S3 URIs for concatenated data
+
+        Returns:
+        - dict: Prediction results for this epoch shift
+        """
+        # Create modeler with epoch_shift as the date_suffix
+        shift_s3_uris = {f'sh{epoch_shift}': concat_uris['concat']}
+
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=f'sh{epoch_shift}',
+            s3_uris=shift_s3_uris,
+            override_approvals=True  # Skip confirmations in parallel execution
+        )
+
+        # Load the model for this epoch_shift
+        try:
+            model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
+            logger.debug(f"Loaded model for epoch_shift={epoch_shift}: {model_info['model_uri']}")
+        except FileNotFoundError as e:
+            logger.error(f"No model found for epoch_shift={epoch_shift}")
+            raise e
+
+        # Run batch predictions for test and val (this runs them in parallel internally)
+        pred_results = modeler.batch_predict_test_and_val()
+
+        # Compile results
+        return {
+            'test': pred_results['test'],
+            'val': pred_results['val'],
+            'model_uri': model_info['model_uri'],
+            'training_job_name': model_info.get('training_job_name'),
+            'epoch_shift': epoch_shift
+        }
+
 
 
 # ---------------------------------
