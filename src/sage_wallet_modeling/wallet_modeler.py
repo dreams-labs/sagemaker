@@ -87,17 +87,6 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
-        # Validate date_suffix format, but allow synthetic suffixes
-        allowed_synthetic = {'concat'}
-        if date_suffix not in allowed_synthetic:
-            try:
-                datetime.strptime(date_suffix, "%y%m%d")
-            except ValueError as exc:
-                raise ValueError(
-                    f"Invalid date_suffix format: {date_suffix}. "
-                    "Expected 'YYMMDD' or one of " + ", ".join(allowed_synthetic)
-                ) from exc
-
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
         base_upload_directory = wallets_config['training_data']['upload_directory']
@@ -128,69 +117,22 @@ class WalletModeler:
         - dict: Contains model URI and training job name
         """
         # If script-mode is enabled in config, delegate to the script-mode launcher
-        if self.modeling_config.get('script_mode', {}).get('enabled', False):
-            return sm.initiate_script_modeling(
-                wallets_config=self.wallets_config,
-                modeling_config=self.modeling_config,
-                date_suffix=self.date_suffix,
-                s3_uris=self.s3_uris,
-            )
-
-
-        logger.info("Starting SageMaker training sequence...")
-
-        # Locate relevant S3 directories
-        date_uris = self._validate_s3_uris()
-        model_output_path = self._validate_model_output_path()
-
-        # Prepare containerized estimator
-        xgb_estimator = self._configure_estimator(model_output_path)
-
-        # Define training data inputs
-        train_input = TrainingInput(
-            s3_data=date_uris['train'],
-            content_type='text/csv'
-        )
-        validation_input = TrainingInput(
-            s3_data=date_uris['eval'],
-            content_type='text/csv'
+        return sm.initiate_script_modeling(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=self.date_suffix,
+            s3_uris=self.s3_uris,
         )
 
-        # Launch training job with descriptive name
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        job_name = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-{timestamp}"
 
-        u.notify('logo_sci_fi_warm_swell')
-        logger.milestone(f"Launching training job: {job_name}")
-        logger.info(f"Model output parent directory: {model_output_path}")
-
-        xgb_estimator.fit(
-            inputs={
-                'train': train_input,
-                'validation': validation_input
-            },
-            job_name=job_name,
-            wait=True
-        )
-
-        # Save training metadata to S3
-        self.model_uri = xgb_estimator.model_data
-        self._upload_training_artifacts(job_name)
-
-        logger.milestone(f"Training completed. Model stored at: {self.model_uri}")
-        u.notify('mellow_chime_005')
-
-        return {
-            'model_uri': self.model_uri,
-            'training_job_name': job_name,
-            'date_suffix': self.date_suffix
-        }
-
-
-    def load_existing_model(self, model_uri: str = None):
+    def load_existing_model(self, model_uri: str = None, epoch_shift: int = None):
         """
-        Load the most recent trained model for a given date_suffix.
-        Handles both container-mode and script-mode model storage patterns.
+        Load the most recent trained model for a given date_suffix or epoch_shift.
+        Handles script-mode model storage pattern.
+
+        Params:
+        - model_uri (str, optional): Specific model URI to load directly
+        - epoch_shift (int, optional): Find model for specific epoch shift (uses sh{epoch_shift} pattern)
 
         Returns:
         - dict: Contains model URI and training job name of most recent model
@@ -218,21 +160,19 @@ class WalletModeler:
                 'timestamp': None
             }
 
-        # Check if script-mode is enabled
-        script_mode_enabled = self.modeling_config.get('script_mode', {}).get('enabled', False)
-
-        if script_mode_enabled:
-            # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
-            bucket_name = self.wallets_config['aws']['script_model_bucket']
-            base_prefix = f"model-outputs/{self.upload_directory}/{self.date_suffix}/"
-            job_name_pattern = f"wscr-{self.upload_directory[:8]}-{self.date_suffix}-"
-            model_file_path = "output/model.tar.gz"
+        # Determine effective date_suffix and job name pattern based on epoch_shift
+        if epoch_shift is not None:
+            effective_date_suffix = f"sh{epoch_shift}"
+            job_name_pattern = f"wscr-{self.upload_directory[:8]}-sh{epoch_shift}-"
+            logger.debug(f"Loading model for epoch_shift={epoch_shift} using pattern: {job_name_pattern}")
         else:
-            # Container-mode path: s3://{training_bucket}/sagemaker-models/{upload_directory}/
-            bucket_name = self.wallets_config['aws']['training_bucket']
-            base_prefix = f"sagemaker-models/{self.upload_directory}/"
-            job_name_pattern = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-"
-            model_file_path = "output/model.tar.gz"
+            effective_date_suffix = self.date_suffix
+            job_name_pattern = f"wscr-{self.upload_directory[:8]}-{self.date_suffix}-"
+
+        # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{effective_date_suffix}/
+        bucket_name = self.wallets_config['aws']['script_model_bucket']
+        base_prefix = f"model-outputs/{self.upload_directory}/{effective_date_suffix}/"
+        model_file_path = "output/model.tar.gz"
 
         # List all objects under the upload folder
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -250,8 +190,7 @@ class WalletModeler:
                 raise ConfigError(f"Unable to access S3 bucket {bucket_name}: {e}") from e
 
         if 'CommonPrefixes' not in response:
-            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-            raise FileNotFoundError(f"No {mode_desc} models found under path: s3://{bucket_name}/{base_prefix}")
+            raise FileNotFoundError(f"No script-mode models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
         matching_folders = []
@@ -266,9 +205,9 @@ class WalletModeler:
                 matching_folders.append((timestamp_part, folder_name, folder_path))
 
         if not matching_folders:
-            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-            raise FileNotFoundError(f"No {mode_desc} models found for upload_directory '{self.upload_directory}' "
-                                    f"and date_suffix '{self.date_suffix}' "
+            target_description = f"epoch_shift={epoch_shift}" if epoch_shift is not None else f"date_suffix='{self.date_suffix}'"
+            raise FileNotFoundError(f"No script-mode models found for upload_directory '{self.upload_directory}' "
+                                    f"and {target_description} "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
         # Sort by timestamp to get most recent (assuming YYYYMMDD-HHMMSS format)
@@ -291,8 +230,8 @@ class WalletModeler:
         # Store model artifacts
         self.model_uri = model_uri
 
-        mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-        logger.info(f"Loaded most recent {mode_desc} model (timestamp: {most_recent_timestamp}): {model_uri}")
+        log_message = f"Loaded most recent script-mode model (timestamp: {most_recent_timestamp}): {model_uri}"
+        logger.info(log_message)
 
         return {
             'model_uri': model_uri,
@@ -610,70 +549,15 @@ class WalletModeler:
     #      Train Model Methods
     # ------------------------------
 
-    def _configure_estimator(self, model_output_path: str):
-        """
-        Configure XGBoost estimator with dynamic objective based on model type.
-
-        Params:
-        - model_output_path (str): S3 path for model artifacts
-
-        Returns:
-        - Estimator: Configured SageMaker XGBoost estimator
-        """
-        # Configure hyperparameters with dynamic objective
-        hyperparameters = self.modeling_config['training']['hyperparameters'].copy()
-        model_type = self.modeling_config['training']['model_type']
-
-        # Configure model type
-        if model_type == 'classification':
-            hyperparameters['objective'] = 'binary:logistic'
-        elif model_type == 'regression':
-            hyperparameters['objective'] = 'reg:linear'
-        logger.info(f"Model type: {model_type}, Objective: {hyperparameters['objective']}")
-
-        # Configure eval_metric
-        if 'eval_metric' in self.modeling_config['training']:
-            hyperparameters['eval_metric'] = self.modeling_config['training']['eval_metric']
-        logger.info(f"Using eval_metric: {hyperparameters['eval_metric']}")
-
-        # Define container
-        model_container = sagemaker.image_uris.retrieve(
-            framework=self.modeling_config['framework']['name'],
-            region=self.sagemaker_session.boto_region_name,
-            version=self.modeling_config['framework']['version']
-        )
-
-        # Log version info and other metadata
-        logger.info(f"SageMaker XGBoost container: {model_container}")
-        container_parts = model_container.split('/')[-1].split(':')
-        if len(container_parts) > 1:
-            container_version = container_parts[-1]
-            logger.info(f"Container version tag: {container_version}")
-        config_version = self.modeling_config['framework']['version']
-        logger.info(f"Requested framework version: {config_version}")
-
-        # Create estimator
-        xgb_estimator = Estimator(
-            image_uri=model_container,
-            instance_type=self.modeling_config['metaparams']['instance_type'],
-            instance_count=self.modeling_config['metaparams']['instance_count'],
-            role=self.role,
-            sagemaker_session=self.sagemaker_session,
-            hyperparameters=hyperparameters,
-            output_path=model_output_path
-        )
-
-        return xgb_estimator
-
-
     def _validate_model_output_path(self):
         """
         Defines the model_output_path and passes a confirmation request if a
          model already exists there.
         """
         # Create descriptive model output path
+        dataset_str = 'dev' if self.wallets_config['training_data']['dataset'] == 'dev' else 'prod'
         model_output_path = (f"s3://{self.wallets_config['aws']['training_bucket']}/"
-                             f"sagemaker-models/{self.upload_directory}/")
+                             f"sagemaker-models/{self.upload_directory}{dataset_str}/")
 
         # Check if model output path already exists
         s3_client = self.sagemaker_session.boto_session.client('s3')

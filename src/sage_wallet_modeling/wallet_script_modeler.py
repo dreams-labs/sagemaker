@@ -102,7 +102,8 @@ def _train_single_period_script_model(
     # Build output path
     bucket = wallets_config['aws']['script_model_bucket']
     upload_dir = wallets_config['training_data']['upload_directory']
-    output_path = f"s3://{bucket}/model-outputs/{upload_dir}/{date_suffix}"
+    dataset_str = '-dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
+    output_path = f"s3://{bucket}/model-outputs/{upload_dir}{dataset_str}/{date_suffix}"
 
     # Prepare hyperparameters for script-mode
     hp = _prepare_hyperparameters(modeling_config)
@@ -120,7 +121,8 @@ def _train_single_period_script_model(
     )
 
     # Assemble job name
-    job_name = _build_job_name("wscr", upload_dir, date_suffix)
+    shift_str = f"sh{hp['epoch_shift']}"
+    job_name = _build_job_name("wscr", upload_dir, shift_str)
     # Upload config JSON for this HPO job
     configs_s3_dict = _upload_config_to_s3(
         wallets_config,
@@ -375,6 +377,15 @@ def _build_job_name(prefix: str, upload_dir: str, suffix: str = None) -> str:
     """
     Build a unique SageMaker job name within 32 character limit.
     Reserves 11 chars for timestamp, leaving 21 for prefix-uploaddir-suffix.
+
+    4 prefix
+    1 '-'
+    8 first 8 of upload_directory
+    1 '-'
+    6 suffix
+    1 '-'
+    11 timestamp
+    = 32 total
     """
     ts = datetime.now().strftime("%m%d-%H%M%S")  # 11 chars
     max_non_timestamp = 21  # 32 - 11 = 21
@@ -395,6 +406,15 @@ def _build_job_name(prefix: str, upload_dir: str, suffix: str = None) -> str:
         non_timestamp_part = "-".join(parts)
 
     job_name = f"{non_timestamp_part}-{ts}"
+
+    # Validate final job name length
+    if len(job_name) > 32:
+        raise ConfigError(
+            f"Generated job name '{job_name}' ({len(job_name)} chars) exceeds "
+            f"SageMaker's 32 character limit. Consider shortening upload_directory "
+            f"or suffix parameters."
+        )
+
     return job_name
 
 

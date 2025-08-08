@@ -17,11 +17,9 @@ training_data: #SageMaker
     concatenate_offsets: True  # whether to model each offset individually or concat them together
     date_0: '200127' # the date that all offsets will be numbered relative to
     epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
-        0,
-        30,
+        # 0,
         60,
-        90,
-        120
+        # 120
     ]
 
     train_offsets: [
