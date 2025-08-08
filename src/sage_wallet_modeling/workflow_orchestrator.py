@@ -4,6 +4,7 @@ model training coordination, and results handling.
 """
 import logging
 import tempfile
+import copy
 from typing import List
 import os
 from pathlib import Path
@@ -586,6 +587,116 @@ class WalletWorkflowOrchestrator:
             s3_uris[date_suffix] = date_uris
 
         return s3_uris
+
+
+    def train_all_epoch_shift_models(
+        self,
+        concat_uris: dict[str, str]
+    ) -> dict[int, dict]:
+        """
+        Train models for all epoch shifts using concatenated data with temporal filtering.
+
+        Each model uses the same master concatenated dataset but applies different
+        epoch_shift filtering in the container to train on different temporal windows.
+
+        Params:
+        - epoch_shifts (list[int]): List of shift values (e.g., [0, 30, 60, 90, 120])
+        - concat_uris (dict): S3 URIs for concatenated data splits
+            {'train': s3://..., 'eval': s3://..., 'train_y': s3://..., 'eval_y': s3://...}
+
+        Returns:
+        - dict: Training results keyed by epoch_shift {shift: training_result}
+        """
+        epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
+        if not epoch_shifts:
+            raise ValueError("epoch_shifts cannot be empty")
+
+        if not concat_uris:
+            raise ValueError("concat_uris cannot be empty")
+
+        training_results = {}
+        n_threads = self.wallets_config['n_threads']['train_all_models']
+
+        logger.milestone(f"Training models for {len(epoch_shifts)} epoch shifts: {epoch_shifts}")
+        logger.info(f"Using {n_threads} concurrent training jobs")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_shift = {
+                executor.submit(
+                    self._train_single_epoch_shift,
+                    shift,
+                    concat_uris
+                ): shift
+                for shift in epoch_shifts
+            }
+
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                try:
+                    result = future.result()
+                    training_results[shift] = result
+                    logger.milestone(f"Successfully completed training for epoch_shift={shift}")
+                except Exception as e:
+                    logger.error(f"Training failed for epoch_shift={shift}: {e}")
+                    training_results[shift] = {'error': str(e)}
+
+        successful_models = len([r for r in training_results.values() if 'error' not in r])
+        logger.milestone(f"Epoch shift training complete: {successful_models}/{len(epoch_shifts)} models successful")
+
+        return training_results
+
+
+    def _train_single_epoch_shift(
+        self,
+        epoch_shift: int,
+        concat_uris: dict[str, str]
+    ) -> dict:
+        """
+        Train a model for a specific epoch shift using concatenated data.
+
+        Creates a modified modeling config with the epoch_shift hyperparameter,
+        then launches training via WalletModeler with the concatenated dataset.
+
+        Params:
+        - epoch_shift (int): Days to shift epoch offsets (e.g., 0, 30, 60, 90, 120)
+        - concat_uris (dict): S3 URIs for concatenated data splits
+
+        Returns:
+        - dict: Training results for this epoch shift
+        """
+        # Create modified modeling config with epoch_shift hyperparameter
+        modified_modeling_config = copy.deepcopy(self.modeling_config)
+        modified_modeling_config['training']['hyperparameters']['epoch_shift'] = epoch_shift
+
+        # Prepare s3_uris dict keyed by synthetic suffix with shift info
+        synthetic_suffix = f'sh{epoch_shift}'
+        s3_uris = {
+            synthetic_suffix: {
+                'train': concat_uris['train'],
+                'eval': concat_uris['eval'],
+                'train_y': concat_uris['train_y'],
+                'eval_y': concat_uris['eval_y']
+            }
+        }
+
+        # Create WalletModeler with modified config
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=modified_modeling_config,
+            date_suffix=synthetic_suffix,
+            s3_uris=s3_uris,
+            override_approvals=self.wallets_config['workflow']['override_existing_models']
+        )
+
+        # Launch training
+        logger.info(f"Starting training for epoch_shift={epoch_shift}")
+        result = modeler.train_model()
+
+        # Add epoch_shift info to result for tracking
+        result['epoch_shift'] = epoch_shift
+        result['synthetic_suffix'] = synthetic_suffix
+
+        return result
 
 
     def train_all_models(self):
