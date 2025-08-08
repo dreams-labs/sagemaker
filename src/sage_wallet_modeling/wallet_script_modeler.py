@@ -102,7 +102,8 @@ def _train_single_period_script_model(
     # Build output path
     bucket = wallets_config['aws']['script_model_bucket']
     upload_dir = wallets_config['training_data']['upload_directory']
-    output_path = f"s3://{bucket}/model-outputs/{upload_dir}/{date_suffix}"
+    dataset_str = '-dev' if wallets_config['training_data']['dataset'] == 'dev' else ''
+    output_path = f"s3://{bucket}/model-outputs/{upload_dir}{dataset_str}/{date_suffix}"
 
     # Prepare hyperparameters for script-mode
     hp = _prepare_hyperparameters(modeling_config)
