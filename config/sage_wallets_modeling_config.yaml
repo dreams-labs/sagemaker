@@ -5,8 +5,8 @@ framework:
 
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
-    instance_type: local
-    # instance_type: ml.m5.2xlarge
+    # instance_type: local
+    instance_type: ml.m5.2xlarge
     # instance_type: ml.m6i.2xlarge
     # instance_type: ml.c5.9xlarge
     # instance_type: ml.c6i.4xlarge
@@ -17,7 +17,6 @@ metaparams:
     batch_trans_instance_count: 1
 
 script_mode:
-    enabled: True
     entry_point: single_model_entry.py
     # entry_point: temporal_cv_model_entry.py
     source_dir: ../src/script_modeling
