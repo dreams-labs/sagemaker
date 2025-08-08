@@ -74,7 +74,6 @@ class ScriptModeConfig(NoExtrasBaseModel):
     """
     Configuration for script-mode training settings.
     """
-    enabled: bool = Field(..., description="Whether to enable script-mode training")
     entry_point: str = Field(..., description="Script entry point for training")
     source_dir: str = Field(..., description="Path to source directory for script-mode training")
 

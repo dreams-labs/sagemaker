@@ -87,17 +87,6 @@ class WalletModeler:
         self.s3_uris = s3_uris
         self.date_suffix = date_suffix
 
-        # Validate date_suffix format, but allow synthetic suffixes
-        allowed_synthetic = {'concat'}
-        if date_suffix not in allowed_synthetic:
-            try:
-                datetime.strptime(date_suffix, "%y%m%d")
-            except ValueError as exc:
-                raise ValueError(
-                    f"Invalid date_suffix format: {date_suffix}. "
-                    "Expected 'YYMMDD' or one of " + ", ".join(allowed_synthetic)
-                ) from exc
-
         # Store dataset and upload folder as instance state
         self.dataset = wallets_config['training_data'].get('dataset', 'dev')
         base_upload_directory = wallets_config['training_data']['upload_directory']
@@ -190,7 +179,7 @@ class WalletModeler:
     def load_existing_model(self, model_uri: str = None):
         """
         Load the most recent trained model for a given date_suffix.
-        Handles both container-mode and script-mode model storage patterns.
+        Handles script-mode model storage pattern.
 
         Returns:
         - dict: Contains model URI and training job name of most recent model
@@ -218,21 +207,11 @@ class WalletModeler:
                 'timestamp': None
             }
 
-        # Check if script-mode is enabled
-        script_mode_enabled = self.modeling_config.get('script_mode', {}).get('enabled', False)
-
-        if script_mode_enabled:
-            # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
-            bucket_name = self.wallets_config['aws']['script_model_bucket']
-            base_prefix = f"model-outputs/{self.upload_directory}/{self.date_suffix}/"
-            job_name_pattern = f"wscr-{self.upload_directory[:8]}-{self.date_suffix}-"
-            model_file_path = "output/model.tar.gz"
-        else:
-            # Container-mode path: s3://{training_bucket}/sagemaker-models/{upload_directory}/
-            bucket_name = self.wallets_config['aws']['training_bucket']
-            base_prefix = f"sagemaker-models/{self.upload_directory}/"
-            job_name_pattern = f"wallet-xgb-{self.upload_directory}-{self.date_suffix}-"
-            model_file_path = "output/model.tar.gz"
+        # Script-mode path: s3://{script_model_bucket}/model-outputs/{upload_directory}/{date_suffix}/
+        bucket_name = self.wallets_config['aws']['script_model_bucket']
+        base_prefix = f"model-outputs/{self.upload_directory}/{self.date_suffix}/"
+        job_name_pattern = f"wscr-{self.upload_directory[:8]}-{self.date_suffix}-"
+        model_file_path = "output/model.tar.gz"
 
         # List all objects under the upload folder
         s3_client = self.sagemaker_session.boto_session.client('s3')
@@ -250,8 +229,7 @@ class WalletModeler:
                 raise ConfigError(f"Unable to access S3 bucket {bucket_name}: {e}") from e
 
         if 'CommonPrefixes' not in response:
-            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-            raise FileNotFoundError(f"No {mode_desc} models found under path: s3://{bucket_name}/{base_prefix}")
+            raise FileNotFoundError(f"No script-mode models found under path: s3://{bucket_name}/{base_prefix}")
 
         # Filter for training job folders matching our pattern
         matching_folders = []
@@ -266,8 +244,7 @@ class WalletModeler:
                 matching_folders.append((timestamp_part, folder_name, folder_path))
 
         if not matching_folders:
-            mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-            raise FileNotFoundError(f"No {mode_desc} models found for upload_directory '{self.upload_directory}' "
+            raise FileNotFoundError(f"No script-mode models found for upload_directory '{self.upload_directory}' "
                                     f"and date_suffix '{self.date_suffix}' "
                                     f"under path: s3://{bucket_name}/{base_prefix}")
 
@@ -291,8 +268,7 @@ class WalletModeler:
         # Store model artifacts
         self.model_uri = model_uri
 
-        mode_desc = "script-mode" if script_mode_enabled else "container-mode"
-        logger.info(f"Loaded most recent {mode_desc} model (timestamp: {most_recent_timestamp}): {model_uri}")
+        logger.info(f"Loaded most recent script-mode model (timestamp: {most_recent_timestamp}): {model_uri}")
 
         return {
             'model_uri': model_uri,
