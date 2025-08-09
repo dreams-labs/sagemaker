@@ -138,6 +138,7 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"  {date_suffix}: {date_rows:,} rows across {len(date_data)} splits")
 
 
+    @u.timing_decorator
     def preprocess_all_training_data(self):
         """
         Preprocess training data for all loaded date suffixes independently.
@@ -196,6 +197,7 @@ class WalletWorkflowOrchestrator:
             data_by_date = self.preprocess_all_training_data()
         else:
             # Skip reprocessing and load saved preprocessed CSVs
+            logger.info("Loading preprocessed training data...")
             data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
 
         logger.info("Beginning concatenation of preprocessed data...")
@@ -208,6 +210,22 @@ class WalletWorkflowOrchestrator:
             'test':  split_requirements['all_test_offsets'],
             'val':   split_requirements['all_val_offsets']
         }
+        # Preflight: ensure no NaNs and consistent column counts across all date_suffixes per split
+        for split, offsets in offsets_map.items():
+            if not offsets:
+                continue
+            ncols_by_date = {}
+            for offset in offsets:
+                if offset not in data_by_date or split not in data_by_date[offset]:
+                    raise KeyError(f"Missing data for offset '{offset}' split '{split}'")
+                df_loaded = data_by_date[offset][split]
+                if df_loaded.isnull().values.any():
+                    bad_cols = df_loaded.columns[df_loaded.isnull().any()].tolist()
+                    raise ValueError(f"NaNs detected in loaded preprocessed CSV for "
+                                     f"{offset}/{split}: columns {bad_cols}")
+                ncols_by_date[offset] = df_loaded.shape[1]
+            if len(set(ncols_by_date.values())) != 1:
+                raise ValueError(f"Column count mismatch for split '{split}' across dates: {ncols_by_date}")
 
         # Build concatenation output directory alongside the preprocessed tree
         base_dir = Path(self.wallets_config['training_data']['local_s3_root']) \
@@ -769,6 +787,16 @@ class WalletWorkflowOrchestrator:
                     raise FileNotFoundError(f"Preprocessed file not found: {filepath}")
 
                 date_data[split_name] = pd.read_csv(filepath, header=None)
+                # Validate: no NaNs in any loaded preprocessed CSV (guards against ragged rows, etc.)
+                if date_data[split_name].isnull().values.any():
+                    bad_cols = date_data[split_name].columns[date_data[split_name].isnull().any()].tolist()
+                    logger.error(
+                        "NaNs found in preprocessed CSV for %s/%s; columns with NaNs: %s",
+                        date_suffix, split_name, bad_cols
+                    )
+                    raise ValueError(
+                        f"NaNs found in preprocessed CSV for {date_suffix}/{split_name}: columns {bad_cols}"
+                    )
 
             # Load metadata from the same folder
             metadata_file = date_folder / "metadata.json"
