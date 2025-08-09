@@ -19,7 +19,9 @@ from sage_wallet_modeling.wallet_modeler import WalletModeler
 # For cross-date CV training
 import script_modeling.custom_transforms as ct
 import utils as u
+from utils import ConfigError
 import sage_utils.config_validation as ucv
+from sage_wallet_insights import model_evaluation as sime
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -136,6 +138,7 @@ class WalletWorkflowOrchestrator:
             logger.debug(f"  {date_suffix}: {date_rows:,} rows across {len(date_data)} splits")
 
 
+    @u.timing_decorator
     def preprocess_all_training_data(self):
         """
         Preprocess training data for all loaded date suffixes independently.
@@ -147,16 +150,14 @@ class WalletWorkflowOrchestrator:
             raise ValueError("No training data loaded. Call load_all_training_data() first.")
 
         preprocessed_by_date = {}
-        concatenate_mode = self.wallets_config['training_data'].get('concatenate_offsets', False)
 
         logger.info(f"Preprocessing {len(self.training_data)} date periods...")
 
         for date_suffix, date_data in self.training_data.items():
             logger.debug(f"Preprocessing data for {date_suffix}...")
 
-            # Apply temporal filtering if concatenation mode enabled
-            if concatenate_mode:
-                date_data = self._filter_temporal_overlap(date_data, date_suffix)
+            # Apply temporal filtering to prevent overlap
+            date_data = self._filter_temporal_overlap(date_data, date_suffix)
 
             # Initialize preprocessor for this date
             preprocessor = SageWalletsPreprocessor(self.wallets_config, self.modeling_config)
@@ -196,6 +197,7 @@ class WalletWorkflowOrchestrator:
             data_by_date = self.preprocess_all_training_data()
         else:
             # Skip reprocessing and load saved preprocessed CSVs
+            logger.info("Loading preprocessed training data...")
             data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
 
         logger.info("Beginning concatenation of preprocessed data...")
@@ -208,6 +210,22 @@ class WalletWorkflowOrchestrator:
             'test':  split_requirements['all_test_offsets'],
             'val':   split_requirements['all_val_offsets']
         }
+        # Preflight: ensure no NaNs and consistent column counts across all date_suffixes per split
+        for split, offsets in offsets_map.items():
+            if not offsets:
+                continue
+            ncols_by_date = {}
+            for offset in offsets:
+                if offset not in data_by_date or split not in data_by_date[offset]:
+                    raise KeyError(f"Missing data for offset '{offset}' split '{split}'")
+                df_loaded = data_by_date[offset][split]
+                if df_loaded.isnull().values.any():
+                    bad_cols = df_loaded.columns[df_loaded.isnull().any()].tolist()
+                    raise ValueError(f"NaNs detected in loaded preprocessed CSV for "
+                                     f"{offset}/{split}: columns {bad_cols}")
+                ncols_by_date[offset] = df_loaded.shape[1]
+            if len(set(ncols_by_date.values())) != 1:
+                raise ValueError(f"Column count mismatch for split '{split}' across dates: {ncols_by_date}")
 
         # Build concatenation output directory alongside the preprocessed tree
         base_dir = Path(self.wallets_config['training_data']['local_s3_root']) \
@@ -241,9 +259,9 @@ class WalletWorkflowOrchestrator:
             if concatenated.isnull().any().any():
                 raise ValueError(f"NaN values detected in {split} split before saving to CSV")
 
-            out_file = concat_base / f"{split}.csv"
-            concatenated.to_csv(out_file, index=False, header=False)
-            logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
+            out_file = concat_base / f"{split}.csv.gz"
+            concatenated.to_csv(out_file, index=False, header=False, compression='gzip')
+            logger.info(f"Saved concatenated {split}.csv.gz with {len(concatenated)} rows to {out_file}")
 
         # Add this after the main concatenation loop, before the y-file exports
         logger.info("Copying metadata for concatenated dataset...")
@@ -360,8 +378,11 @@ class WalletWorkflowOrchestrator:
         n_threads = self.wallets_config['n_threads']['upload_all_training_data']
         logger.info(f"Uploading concatenated splits in parallel with {n_threads} threads...")
         def _upload_split(split: str):
-            s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
+            is_y = split.endswith('_y')
+            filename = f"{split}.csv" if is_y else f"{split}.csv.gz"
+            s3_key = f"{base_folder}/{folder_prefix}{filename}"
             s3_uri = f"s3://{bucket}/{s3_key}"
+
 
             # Check if file exists
             try:
@@ -379,7 +400,7 @@ class WalletWorkflowOrchestrator:
                 logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
 
             # Upload local file
-            local_file = concat_dir / f"{split}.csv"
+            local_file = concat_dir / filename
             if not local_file.exists():
                 raise FileNotFoundError(f"Concatenated file not found: {local_file}")
             s3_client.upload_file(str(local_file), bucket, s3_key)
@@ -478,7 +499,6 @@ class WalletWorkflowOrchestrator:
         return training_results
 
 
-
     @u.timing_decorator
     def train_concatenated_offsets_model(
             self,
@@ -527,12 +547,178 @@ class WalletWorkflowOrchestrator:
         return result
 
 
+    def retrieve_training_data_uris(self, date_suffixes: list):
+        """
+        Generate S3 URIs for training data by finding files that match split patterns.
+        Handles both preprocessed (per-date folders) and concatenated (flat) structures.
+
+        Params:
+        - date_suffixes (list): List of date suffixes (e.g., ["231107", "231201"])
+                            For concatenated data, use ["concat"]
+
+        Returns:
+        - dict: S3 URIs for each date suffix and data split
+        """
+        if not date_suffixes:
+            raise ValueError("date_suffixes cannot be empty")
+
+        # Using concatenated directory structure
+
+        # Get S3 file locations
+        bucket_name, base_folder, folder_prefix = self._get_s3_upload_paths()
+
+        s3_client = boto3.client('s3')
+        s3_uris = {}
+        splits = ['train', 'test', 'eval', 'val']
+
+        for date_suffix in date_suffixes:
+            date_uris = {}
+
+            for split_name in splits:
+                # Concatenated structure: files directly under upload directory
+                # Path: s3://bucket/concatenated/{upload_dir}/train.csv
+                prefix = f"{base_folder}/{folder_prefix}{split_name}"
+                expected_filename = f"{split_name}.csv.gz"
+
+                try:
+                    response = s3_client.list_objects_v2(
+                        Bucket=bucket_name,
+                        Prefix=prefix
+                    )
+
+                    if 'Contents' not in response:
+                        logger.warning("No S3 objects found matching prefix: "
+                                       f"s3://{bucket_name}/{prefix}")
+                        continue
+
+                    # Look for exact filename match in concatenated layout
+                    matching_objects = [
+                        obj for obj in response['Contents']
+                        if obj['Key'].split('/')[-1] == expected_filename
+                    ]
+
+                    if len(matching_objects) == 0:
+                        raise FileNotFoundError(
+                            f"No concatenated CSV file found for '{split_name}' at: s3://{bucket_name}/{prefix}"
+                        )
+
+                    if len(matching_objects) > 1:
+                        matching_files = [obj['Key'].split('/')[-1] for obj in matching_objects]
+                        raise ValueError(f"Multiple files found for split '{split_name}' in "
+                                        f"{date_suffix}: {matching_files}")
+
+                    # Use the actual filename found
+                    s3_key = matching_objects[0]['Key']
+                    s3_uri = f"s3://{bucket_name}/{s3_key}"
+                    date_uris[split_name] = s3_uri
+
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'NoSuchBucket':
+                        raise FileNotFoundError(f"S3 bucket does not exist: {bucket_name}") from e
+                    else:
+                        raise
+
+            s3_uris[date_suffix] = date_uris
+
+        return s3_uris
+
+
+    def predict_all_epoch_shifts(self) -> dict[int, dict]:
+        """
+        Generate predictions for all epoch shift models using concatenated test/val data.
+        Runs predictions in parallel across epoch shifts.
+
+        Returns:
+        - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}}
+        """
+        epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
+        n_threads = self.wallets_config['n_threads']['predict_all_models']
+
+        if not epoch_shifts:
+            raise ConfigError("No epoch_shifts configured in wallets_config")
+
+        # Load concatenated data URIs once
+        concat_uris = self.retrieve_training_data_uris(['concat'])
+
+        logger.milestone(f"Starting predictions for {len(epoch_shifts)} epoch shifts "
+                        f"using {n_threads} threads...")
+
+        prediction_results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            # Submit all epoch shift predictions
+            future_to_shift = {
+                executor.submit(
+                    self._predict_single_epoch_shift,
+                    epoch_shift,
+                    concat_uris
+                ): epoch_shift
+                for epoch_shift in epoch_shifts
+            }
+
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                try:
+                    result = future.result()
+                    prediction_results[shift] = result
+                    logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
+                except Exception as e:
+                    logger.error(f"✗ Failed predictions for epoch_shift={shift}: {e}")
+                    prediction_results[shift] = {'error': str(e)}
+
+        # Summary
+        successful = len([r for r in prediction_results.values() if 'error' not in r])
+        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(epoch_shifts)} successful")
+
+        return prediction_results
+
+
+    def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
+        """
+        Build a model evaluator for each configured epoch shift using concatenated
+        test/val data and return them in a dict keyed by epoch_shift.
+
+        Returns:
+        - dict: {epoch_shift: evaluator or {'error': str}}
+        """
+        epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
+        if not epoch_shifts:
+            raise ConfigError("No epoch_shifts configured in wallets_config")
+
+        n_threads = self.wallets_config['n_threads']['evaluate_all_models']
+        logger.milestone(
+            f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
+        )
+
+        evaluators_by_shift: dict[int, object] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_shift = {
+                executor.submit(self._build_evaluator_for_shift, shift): shift
+                for shift in epoch_shifts
+            }
+
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                try:
+                    evaluator = future.result()
+                    evaluators_by_shift[shift] = evaluator
+                    logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
+                except Exception as e:
+                    logger.error(f"✗ Failed to build evaluator for epoch_shift={shift}: {e}")
+                    evaluators_by_shift[shift] = {'error': str(e)}
+                    raise e
+
+        return evaluators_by_shift
+
+
+
 
 
     # ------------------------
     #      Helper Methods
     # ------------------------
-
 
     def _filter_temporal_overlap(self, date_data: dict, date_suffix: str) -> dict:
         """
@@ -598,13 +784,25 @@ class WalletWorkflowOrchestrator:
                 raise FileNotFoundError(f"Date folder not found: {date_folder}")
 
             for split_name in splits:
-                filename = f"{split_name}.csv"  # Changed from {split_name}_preprocessed_{date_suffix}.csv
-                filepath = date_folder / filename
+                # Prefer gzip if present; fall back to plain CSV for backward compatibility
+                gz_path = date_folder / f"{split_name}.csv.gz"
+                csv_path = date_folder / f"{split_name}.csv"
+                filepath = gz_path if gz_path.exists() else csv_path
 
                 if not filepath.exists():
-                    raise FileNotFoundError(f"Preprocessed file not found: {filepath}")
+                    raise FileNotFoundError(f"Preprocessed file not found: {gz_path} or {csv_path}")
 
-                date_data[split_name] = pd.read_csv(filepath, header=None)
+                date_data[split_name] = pd.read_csv(filepath, header=None, compression='infer')
+                # Validate: no NaNs in any loaded preprocessed CSV (guards against ragged rows, etc.)
+                if date_data[split_name].isnull().values.any():
+                    bad_cols = date_data[split_name].columns[date_data[split_name].isnull().any()].tolist()
+                    logger.error(
+                        "NaNs found in preprocessed CSV for %s/%s; columns with NaNs: %s",
+                        date_suffix, split_name, bad_cols
+                    )
+                    raise ValueError(
+                        f"NaNs found in preprocessed CSV for {date_suffix}/{split_name}: columns {bad_cols}"
+                    )
 
             # Load metadata from the same folder
             metadata_file = date_folder / "metadata.json"
@@ -797,6 +995,117 @@ class WalletWorkflowOrchestrator:
 
         return result
 
+
+    def _get_s3_upload_paths(self) -> tuple[str, str, str]:
+        """
+        Get S3 bucket, base folder, and upload folder prefix for training data.
+        Automatically switches between preprocessed and concatenated directories
+        based on concatenate_offsets config flag.
+
+        Returns:
+        - tuple: (bucket_name, base_folder, folder_prefix)
+        """
+        bucket_name = self.wallets_config['aws']['training_bucket']
+
+        # Always use concatenated directory
+        base_folder = self.wallets_config['aws']['concatenated_directory']
+
+        upload_directory = self.wallets_config['training_data']['upload_directory']
+        folder_prefix = f"{upload_directory}/"
+
+        return bucket_name, base_folder, folder_prefix
+
+
+    def _predict_single_epoch_shift(self, epoch_shift: int, concat_uris: dict) -> dict:
+        """
+        Helper to predict test and val for a single epoch shift.
+
+        Params:
+        - epoch_shift (int): The epoch shift value
+        - concat_uris (dict): S3 URIs for concatenated data
+
+        Returns:
+        - dict: Prediction results for this epoch shift
+        """
+        # Create modeler with epoch_shift as the date_suffix
+        shift_s3_uris = {f'sh{epoch_shift}': concat_uris['concat']}
+
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=f'sh{epoch_shift}',
+            s3_uris=shift_s3_uris,
+            override_approvals=True  # Skip confirmations in parallel execution
+        )
+
+        # Load the model for this epoch_shift
+        try:
+            model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
+            logger.debug(f"Loaded model for epoch_shift={epoch_shift}: {model_info['model_uri']}")
+        except FileNotFoundError as e:
+            logger.error(f"No model found for epoch_shift={epoch_shift}")
+            raise e
+
+        # Run batch predictions for test and val (this runs them in parallel internally)
+        pred_results = modeler.batch_predict_test_and_val()
+
+        # Compile results
+        return {
+            'test': pred_results['test'],
+            'val': pred_results['val'],
+            'model_uri': model_info['model_uri'],
+            'training_job_name': model_info.get('training_job_name'),
+            'epoch_shift': epoch_shift
+        }
+
+
+    def _build_evaluator_for_shift(self, epoch_shift: int):
+        """
+        Build a single evaluator for the provided epoch shift.
+
+        Steps:
+        - Load model info (to obtain model_uri)
+        - Load batch transform predictions for test/val; if missing, run batch transform
+        - Load concatenated y for test/val and align target column name
+        - Construct and return the evaluator object
+        """
+        date_suffix = f"sh{epoch_shift}"
+
+        # Initialize a modeler to get model info and (if needed) run predictions
+        modeler = WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris=None,
+            override_approvals=True
+        )
+
+        # Load model info (raises if not found)
+        model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
+
+        # Load concatenated y for and y_pred
+        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
+        y_val  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
+        y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
+        y_val_pred  = sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix)
+
+        target_var = self.modeling_config['target']['target_var']
+        y_test.columns = [target_var]
+        y_val.columns = [target_var]
+
+        # Build the evaluator using the shared helper in sage_wallet_insights
+        evaluator = sime.create_concatenated_sagemaker_evaluator(
+            self.wallets_config,
+            self.modeling_config,
+            model_info['model_uri'],
+            y_test_pred,
+            y_test,
+            y_val_pred,
+            y_val,
+            epoch_shift
+        )
+
+        return evaluator
 
 
 # ---------------------------------

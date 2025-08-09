@@ -77,7 +77,8 @@ def select_shifted_offsets(
     df_x_full: pd.DataFrame,
     df_y_full: pd.DataFrame,
     wallets_config: dict,
-    epoch_shift: int
+    epoch_shift: int,
+    split: str
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Filter X and Y data to only include rows from shifted epoch offsets.
@@ -87,6 +88,7 @@ def select_shifted_offsets(
     - df_y_full (DataFrame): Full target data (same row count as df_x_full)
     - wallets_config (dict): Contains base offset definitions and date_0
     - epoch_shift (int): Days to shift all base offsets (e.g., 0, 30, 60, 90)
+    - split (str): 'train' or 'eval'
 
     Returns:
     - tuple: (df_x_filtered, df_y_filtered) with identical row filtering applied
@@ -102,7 +104,7 @@ def select_shifted_offsets(
 
     # Get shifted target offsets
     base_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
-    target_offset_days = base_offsets['train_offsets']  # Use train offsets for filtering
+    target_offset_days = base_offsets[f'{split}_offsets']  # Use train offsets for filtering
 
     print(f"Unique offset_date values in data: {sorted(offset_dates.unique())}")
     print(f"Target offset_days after {epoch_shift} shift: {target_offset_days}")
