@@ -8,18 +8,21 @@ training_data: #SageMaker
 
     # local_directory: dda_945_filters_bal_s  # where to store local artifacts
     # upload_directory: dda-945-filt-bal-s  # new S3 folder name in bucket training_data_processed
-    local_directory: dda_950_autodev  # where to store local artifacts
-    upload_directory: dda-950-autodev  # new S3 folder name in bucket training_data_processed
-
+    local_directory: dda_951_eval_all  # where to store local artifacts
+    upload_directory: dda-951-eval-all  # new S3 folder name in bucket training_data_processed
 
     dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
 
-    concatenate_offsets: True  # whether to model each offset individually or concat them together
+    # Timings #KeyParam
     date_0: '200127' # the date that all offsets will be numbered relative to
     epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
+        # -60,
         0,
         60,
-        # 120
+        # 120,
+        # 180,
+        # 240,
+        # 300
     ]
 
     train_offsets: [
@@ -64,12 +67,12 @@ training_data: #SageMaker
         # '230312',
         # '230411',
         # '230511',
-        # '230610',
-        # '230710',
-        # # '230809',
-        # '230908',
-        # # '231008',
-        # '231107',
+        '230610',
+        '230710',
+        # '230809',
+        '230908',
+        # '231008',
+        '231107',
         # # '231207',
         '240106',
         # '240205',
@@ -100,10 +103,6 @@ training_data: #SageMaker
         '240205',
         '240306',
         '240405',
-        # '240505',
-        # '240604',
-        # '240704',
-        # '240803',
     ]
     test_offsets: [
         '230809',
@@ -115,14 +114,13 @@ training_data: #SageMaker
         '240205',
         '240306',
         '240405',
+        '240505',
+        '240604',
     ]
     val_offsets: [  # val data is 1 month later than these modeling_period_start dates
-        '240405',
-        '240505',
         '240604',
         '240704',
         '240803',
-        '240902',
     ]
 
 preprocessing: #SageMaker
@@ -151,7 +149,7 @@ aws: #SageMaker
 
 n_threads: #SageMaker
     upload_all_training_data: 4 # how many uploads to perform concurrently
-    train_all_models: 4 # how many models to train concurrently
-    predict_datasets: 4 # whether to score 'test' and 'val' sets concurrently
-    predict_all_models: 4 # how many test/val pairs to score concurrently
+    train_all_models: 10 # how many models to train concurrently
+    predict_datasets: 2 # whether to score 'test' and 'val' sets concurrently
+    predict_all_models: 10 # how many test/val pairs to score concurrently
     evaluate_all_models: 4 # how many test/val pairs to score concurrently

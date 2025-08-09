@@ -259,9 +259,9 @@ class WalletWorkflowOrchestrator:
             if concatenated.isnull().any().any():
                 raise ValueError(f"NaN values detected in {split} split before saving to CSV")
 
-            out_file = concat_base / f"{split}.csv"
-            concatenated.to_csv(out_file, index=False, header=False)
-            logger.info(f"Saved concatenated {split}.csv with {len(concatenated)} rows to {out_file}")
+            out_file = concat_base / f"{split}.csv.gz"
+            concatenated.to_csv(out_file, index=False, header=False, compression='gzip')
+            logger.info(f"Saved concatenated {split}.csv.gz with {len(concatenated)} rows to {out_file}")
 
         # Add this after the main concatenation loop, before the y-file exports
         logger.info("Copying metadata for concatenated dataset...")
@@ -378,8 +378,11 @@ class WalletWorkflowOrchestrator:
         n_threads = self.wallets_config['n_threads']['upload_all_training_data']
         logger.info(f"Uploading concatenated splits in parallel with {n_threads} threads...")
         def _upload_split(split: str):
-            s3_key = f"{base_folder}/{folder_prefix}{split}.csv"
+            is_y = split.endswith('_y')
+            filename = f"{split}.csv" if is_y else f"{split}.csv.gz"
+            s3_key = f"{base_folder}/{folder_prefix}{filename}"
             s3_uri = f"s3://{bucket}/{s3_key}"
+
 
             # Check if file exists
             try:
@@ -397,7 +400,7 @@ class WalletWorkflowOrchestrator:
                 logger.info(f"Didn't find S3 file '{s3_uri}', proceeding with upload...")
 
             # Upload local file
-            local_file = concat_dir / f"{split}.csv"
+            local_file = concat_dir / filename
             if not local_file.exists():
                 raise FileNotFoundError(f"Concatenated file not found: {local_file}")
             s3_client.upload_file(str(local_file), bucket, s3_key)
@@ -575,7 +578,7 @@ class WalletWorkflowOrchestrator:
                 # Concatenated structure: files directly under upload directory
                 # Path: s3://bucket/concatenated/{upload_dir}/train.csv
                 prefix = f"{base_folder}/{folder_prefix}{split_name}"
-                expected_filename = f"{split_name}.csv"
+                expected_filename = f"{split_name}.csv.gz"
 
                 try:
                     response = s3_client.list_objects_v2(
@@ -705,6 +708,7 @@ class WalletWorkflowOrchestrator:
                 except Exception as e:
                     logger.error(f"✗ Failed to build evaluator for epoch_shift={shift}: {e}")
                     evaluators_by_shift[shift] = {'error': str(e)}
+                    raise e
 
         return evaluators_by_shift
 
@@ -780,13 +784,15 @@ class WalletWorkflowOrchestrator:
                 raise FileNotFoundError(f"Date folder not found: {date_folder}")
 
             for split_name in splits:
-                filename = f"{split_name}.csv"  # Changed from {split_name}_preprocessed_{date_suffix}.csv
-                filepath = date_folder / filename
+                # Prefer gzip if present; fall back to plain CSV for backward compatibility
+                gz_path = date_folder / f"{split_name}.csv.gz"
+                csv_path = date_folder / f"{split_name}.csv"
+                filepath = gz_path if gz_path.exists() else csv_path
 
                 if not filepath.exists():
-                    raise FileNotFoundError(f"Preprocessed file not found: {filepath}")
+                    raise FileNotFoundError(f"Preprocessed file not found: {gz_path} or {csv_path}")
 
-                date_data[split_name] = pd.read_csv(filepath, header=None)
+                date_data[split_name] = pd.read_csv(filepath, header=None, compression='infer')
                 # Validate: no NaNs in any loaded preprocessed CSV (guards against ragged rows, etc.)
                 if date_data[split_name].isnull().values.any():
                     bad_cols = date_data[split_name].columns[date_data[split_name].isnull().any()].tolist()

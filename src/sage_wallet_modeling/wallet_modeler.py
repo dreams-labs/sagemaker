@@ -632,7 +632,8 @@ class WalletModeler:
             split_type='Line',
             job_name=job_name,
             wait=True,
-            logs=False
+            logs=False,
+            compression_type='Gzip'
         )
 
         # Store predictions URI

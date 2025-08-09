@@ -276,7 +276,10 @@ def _process_concatenated_split(
     3) Align y and y_pred with masks; labels already preprocessed upstream.
     """
     # Load raw features (first column is offset_date; no headers)
-    X_full = pd.read_csv(data_path / f"{split}.csv", header=None)
+    gz_path = data_path / f"{split}.csv.gz"
+    csv_path = data_path / f"{split}.csv"
+    x_path = gz_path if gz_path.exists() else csv_path
+    X_full = pd.read_csv(x_path, header=None, compression='infer')
 
     # Sanity checks
     if len(X_full) != len(y_df):
@@ -333,8 +336,16 @@ def _load_concatenated_features(
     local_dir = wallets_config['training_data']['local_directory']
     data_path = concat_dir / local_dir
 
-    X_train = pd.read_csv(data_path / 'train.csv', header=None)
-    X_test = pd.read_csv(data_path / 'test.csv', header=None)
+    train_gz = data_path / 'train.csv.gz'
+    test_gz = data_path / 'test.csv.gz'
+    train_csv = data_path / 'train.csv'
+    test_csv = data_path / 'test.csv'
+
+    train_path = train_gz if train_gz.exists() else train_csv
+    test_path = test_gz if test_gz.exists() else test_csv
+
+    X_train = pd.read_csv(train_path, header=None, compression='infer')
+    X_test = pd.read_csv(test_path, header=None, compression='infer')
 
     # First column is always y_train
     y_train = X_train.iloc[:, 0]

@@ -44,10 +44,10 @@ training:
         #     cli: cw_inflows
         #     min: 500
         #     max: 10000000
-        macro|btc_mvrv_z_score_last|w1:
-            cli: btc_mvrv
-            min: 1.
-            max: 10
+        # macro|btc_mvrv_z_score_last|w1:
+        #     cli: btc_mvrv
+        #     min: 1.
+        #     max: 10
         # cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
         #     cli: cw_mktcap
         #     min: 5000000

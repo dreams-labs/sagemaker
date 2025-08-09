@@ -60,8 +60,20 @@ def load_data_matrices(
     val_x_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_X"])
     val_y_dir   = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
 
-    df_train_x = pd.read_csv(train_x_dir / "train.csv", header=None)
-    df_val_x   = pd.read_csv(val_x_dir   / "eval.csv",  header=None)
+    def _read_x_csv(dir_path: Path, base_name: str) -> pd.DataFrame:
+        """
+        Read an X split, preferring gzip. Falls back to .csv for backward compatibility.
+        """
+        gz = dir_path / f"{base_name}.csv.gz"
+        csv = dir_path / f"{base_name}.csv"
+        if gz.exists():
+            return pd.read_csv(gz, header=None, compression='infer')
+        if csv.exists():
+            return pd.read_csv(csv, header=None)
+        raise FileNotFoundError(f"Missing X split file: {gz} or {csv}")
+
+    df_train_x = _read_x_csv(train_x_dir, "train")
+    df_val_x   = _read_x_csv(val_x_dir,   "eval")
     df_train_y = pd.read_csv(train_y_dir / "train_y.csv")
     df_val_y   = pd.read_csv(val_y_dir   / "eval_y.csv")
 

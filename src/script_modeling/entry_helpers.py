@@ -41,8 +41,17 @@ def get_valid_hyperparameters(modeling_config) -> dict:
 
     # Add dynamic filter parameters if config provided
     if modeling_config:
-        custom_filters = modeling_config.get('training', {}).get('custom_filters', {})
-        for filter_config in custom_filters.values():
+        # Accept None/dict/list for custom_filters; ignore invalid types
+        custom_filters = modeling_config.get('training', {}).get('custom_filters') or {}
+        if isinstance(custom_filters, dict):
+            iterable = custom_filters.values()
+        elif isinstance(custom_filters, list):
+            iterable = custom_filters
+        else:
+            iterable = []
+        for filter_config in iterable:
+            if not isinstance(filter_config, dict):
+                continue
             cli_name = filter_config.get('cli')
             if cli_name:
                 base_types[f'filter_{cli_name}_min'] = float
@@ -141,7 +150,7 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
     dm = load_csv_as_dmatrix(Path("/opt/ml/input/data/train/train.csv"))
     ```
     """
-    df = pd.read_csv(csv_path, header=None)
+    df = pd.read_csv(csv_path, header=None, compression='infer')
     labels = df.iloc[:, 0].values
     features = df.iloc[:, 1:].values
     return xgb.DMatrix(features, label=labels)
