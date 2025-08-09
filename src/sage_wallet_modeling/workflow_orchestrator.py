@@ -4,6 +4,8 @@ model training coordination, and results handling.
 """
 import logging
 import copy
+import traceback
+import time
 from typing import List
 from pathlib import Path
 import concurrent.futures
@@ -490,8 +492,12 @@ class WalletWorkflowOrchestrator:
                     training_results[shift] = result
                     logger.milestone(f"Successfully completed training for epoch_shift={shift}")
                 except Exception as e:
-                    logger.error(f"Training failed for epoch_shift={shift}: {e}")
-                    training_results[shift] = {'error': str(e)}
+                    logger.exception(f"Training failed for epoch_shift={shift}")
+                    training_results[shift] = {
+                        'error': repr(e),
+                        'type': type(e).__name__,
+                        'traceback': traceback.format_exc(),
+                    }
 
         successful_models = len([r for r in training_results.values() if 'error' not in r])
         logger.milestone(f"Epoch shift training complete: {successful_models}/{len(epoch_shifts)} models successful")
@@ -623,7 +629,13 @@ class WalletWorkflowOrchestrator:
         return s3_uris
 
 
-    def predict_all_epoch_shifts(self, overwrite_existing: bool = False) -> dict[int, dict]:
+    def predict_all_epoch_shifts(
+            self,
+            overwrite_existing: bool = False,
+            retry_attempts: int = 3,
+            retry_delay_seconds: int = 30,
+            retry_backoff: float = 2.0
+        ) -> dict[int, dict]:
         """
         Generate predictions for all epoch shift models using concatenated test/val data.
         Only run predictions if local prediction files do not already exist, unless
@@ -632,9 +644,13 @@ class WalletWorkflowOrchestrator:
         Params:
         - overwrite_existing (bool): If False, skip epoch_shifts where both local
           predictions exist. If True, re-run and overwrite any existing predictions.
+        - retry_attempts (int): Number of times to retry if throttled.
+        - retry_delay_seconds (int): Initial delay (in seconds) before the first retry.
+        - retry_backoff (float): Multiplier applied to delay after each failed attempt (exponential backoff).
 
         Returns:
         - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}} for shifts executed.
+            Only successfully executed shifts are returned. Failures after retries are included with an 'error' key as before.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         n_threads = self.wallets_config['n_threads']['predict_all_models']
@@ -670,10 +686,13 @@ class WalletWorkflowOrchestrator:
             # Submit only required epoch shift predictions
             future_to_shift = {
                 executor.submit(
-                    self._predict_single_epoch_shift,
+                    self._predict_single_epoch_shift_with_retry,
                     epoch_shift,
                     concat_uris,
-                    overwrite_existing
+                    overwrite_existing,
+                    retry_attempts,
+                    retry_delay_seconds,
+                    retry_backoff,
                 ): epoch_shift
                 for epoch_shift in shifts_to_run
             }
@@ -694,6 +713,66 @@ class WalletWorkflowOrchestrator:
         logger.milestone(f"Epoch shift predictions complete: {successful}/{len(prediction_results)} successful")
 
         return prediction_results
+
+
+    def _is_throttling_error(self, exc: Exception) -> bool:
+        """Return True if the exception appears to be an AWS throttling error."""
+        # Botocore ClientError:
+        if isinstance(exc, ClientError):
+            code = exc.response.get('Error', {}).get('Code', '')
+            message = exc.response.get('Error', {}).get('Message', '')
+            if code in {"ThrottlingException", "Throttling", "TooManyRequestsException", "RequestLimitExceeded"}:
+                return True
+            if isinstance(message, str) and ("Rate exceeded" in message or "Throttling" in message):
+                return True
+        # Fallback string check for other exceptions (e.g., SDK wrappers)
+        text = str(exc)
+        return ("Rate exceeded" in text) or ("Throttling" in text)
+
+    def _predict_single_epoch_shift_with_retry(
+        self,
+        epoch_shift: int,
+        concat_uris: dict[str, str],
+        overwrite_existing: bool,
+        retry_attempts: int,
+        retry_delay_seconds: int,
+        retry_backoff: float,
+    ) -> dict:
+        """Call `_predict_single_epoch_shift` with throttling-aware retries."""
+        attempt = 1
+        delay = max(0, int(retry_delay_seconds))
+        last_exc = None
+        while attempt <= max(1, int(retry_attempts)):
+            try:
+                return self._predict_single_epoch_shift(epoch_shift, concat_uris, overwrite_existing)
+            except Exception as exc:  # noqa: BLE001 - we intentionally catch broadly to detect throttling
+                if self._is_throttling_error(exc) and attempt < max(1, int(retry_attempts)):
+                    logger.warning(
+                        "Throttled on epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
+                        epoch_shift,
+                        attempt,
+                        retry_attempts,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                    # Exponential backoff for next attempt
+                    try:
+                        delay = int(delay * float(retry_backoff)) if retry_backoff else delay
+                    except Exception:
+                        # If backoff isn't a valid float, keep the same delay
+                        pass
+                    attempt += 1
+                    last_exc = exc
+                    continue
+                # Non-throttling error or final attempt exhausted
+                last_exc = exc
+                break
+        # If we reach here, all attempts failed
+        if last_exc is not None:
+            raise last_exc
+        # Should never get here, but return {} to satisfy type checker
+        return {}
 
     def _local_predictions_exist(self, epoch_shift: int) -> bool:
         """
