@@ -298,7 +298,8 @@ class WalletModeler:
             self,
             dataset_type: str = 'val',
             download_preds: bool = True,
-            job_name_suffix: str = None
+            job_name_suffix: str = None,
+            override_existing: bool = False
         ):
         """
         Score specified dataset using trained model via SageMaker batch transform.
@@ -338,6 +339,7 @@ class WalletModeler:
         result = self._execute_batch_transform(
             dataset_uri,
             model_name,
+            override_existing=override_existing,
             job_name_suffix=job_name_suffix
         )
 
@@ -349,7 +351,7 @@ class WalletModeler:
 
 
     @u.timing_decorator
-    def batch_predict_test_and_val(self) -> dict[str, dict]:
+    def batch_predict_test_and_val(self, overwrite_existing: bool = False) -> dict[str, dict]:
         """
         Run batch transform predictions for 'test' and 'val' in parallel.
         Returns:
@@ -364,7 +366,8 @@ class WalletModeler:
                     self.predict_with_batch_transform,
                     dataset_type=split,
                     download_preds=True,
-                    job_name_suffix=f"concat-{split}"
+                    job_name_suffix=f"concat-{split}",
+                    override_existing=overwrite_existing
                 ): split
                 for split in splits
             }
