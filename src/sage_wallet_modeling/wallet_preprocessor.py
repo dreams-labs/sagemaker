@@ -167,17 +167,17 @@ class SageWalletsPreprocessor:
         Returns:
         - DataFrame: Preprocessed data ready for SageMaker
         """
-        # Handle missing values with intelligent fill strategy
-        df = self._handle_missing_values(df, split_name)
-
         # Ensure numeric data types
         non_numeric_cols = df.select_dtypes(exclude=['number']).columns
         if len(non_numeric_cols) > 0:
             raise ValueError(f"Non-numeric columns found in {split_name}: "
                              f"{list(non_numeric_cols)}")
 
-        # Convert all to float32 for consistency
-        df = df.astype('float32')
+        # Convert all to float64 for consistency and null handling
+        df = df.astype('float64')
+
+        # Handle missing values with intelligent fill strategy
+        df = self._handle_missing_values(df, split_name)
 
         return df
 
