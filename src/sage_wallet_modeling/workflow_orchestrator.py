@@ -623,13 +623,18 @@ class WalletWorkflowOrchestrator:
         return s3_uris
 
 
-    def predict_all_epoch_shifts(self) -> dict[int, dict]:
+    def predict_all_epoch_shifts(self, overwrite_existing: bool = False) -> dict[int, dict]:
         """
         Generate predictions for all epoch shift models using concatenated test/val data.
-        Runs predictions in parallel across epoch shifts.
+        Only run predictions if local prediction files do not already exist, unless
+        overwrite_existing=True.
+
+        Params:
+        - overwrite_existing (bool): If False, skip epoch_shifts where both local
+          predictions exist. If True, re-run and overwrite any existing predictions.
 
         Returns:
-        - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}}
+        - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}} for shifts executed.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         n_threads = self.wallets_config['n_threads']['predict_all_models']
@@ -640,20 +645,37 @@ class WalletWorkflowOrchestrator:
         # Load concatenated data URIs once
         concat_uris = self.retrieve_training_data_uris(['concat'])
 
-        logger.milestone(f"Starting predictions for {len(epoch_shifts)} epoch shifts "
-                        f"using {n_threads} threads...")
+        # Determine which shifts actually need work
+        shifts_to_run: list[int] = []
+        for epoch_shift in epoch_shifts:
+            if not overwrite_existing and self._local_predictions_exist(epoch_shift):
+                logger.info(
+                    f"Skipping epoch_shift={epoch_shift}: local predictions already exist "
+                    f"and overwrite_existing=False"
+                )
+                continue
+            shifts_to_run.append(epoch_shift)
 
-        prediction_results = {}
+        if not shifts_to_run:
+            logger.milestone("Epoch shift predictions skipped: all predictions exist locally.")
+            return {}
+
+        logger.milestone(
+            f"Starting predictions for {len(shifts_to_run)} epoch shifts using {n_threads} threads..."
+        )
+
+        prediction_results: dict[int, dict] = {}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-            # Submit all epoch shift predictions
+            # Submit only required epoch shift predictions
             future_to_shift = {
                 executor.submit(
                     self._predict_single_epoch_shift,
                     epoch_shift,
-                    concat_uris
+                    concat_uris,
+                    overwrite_existing
                 ): epoch_shift
-                for epoch_shift in epoch_shifts
+                for epoch_shift in shifts_to_run
             }
 
             # Collect results as they complete
@@ -669,11 +691,39 @@ class WalletWorkflowOrchestrator:
 
         # Summary
         successful = len([r for r in prediction_results.values() if 'error' not in r])
-        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(epoch_shifts)} successful")
+        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(prediction_results)} successful")
 
         return prediction_results
 
+    def _local_predictions_exist(self, epoch_shift: int) -> bool:
+        """
+        Check whether both test and val local prediction files already exist and are non-empty
+        for a given epoch_shift (sh{epoch_shift}).
 
+        Returns:
+        - bool: True if both files exist and have size > 0.
+        """
+        local_root = (
+            Path(self.wallets_config['training_data']['local_s3_root'])
+            / "s3_downloads"
+            / "wallet_predictions"
+            / self.wallets_config['training_data']['local_directory']
+            / f"sh{epoch_shift}"
+        )
+        test_path = local_root / "test.csv.out"
+        val_path = local_root / "val.csv.out"
+
+        try:
+            return (
+                test_path.exists() and test_path.stat().st_size > 0 and
+                val_path.exists() and val_path.stat().st_size > 0
+            )
+        except OSError:
+            # If stat() fails for any reason, treat as non-existent to be safe
+            return False
+
+
+    @u.timing_decorator
     def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
         """
         Build a model evaluator for each configured epoch shift using concatenated
@@ -710,7 +760,7 @@ class WalletWorkflowOrchestrator:
                     evaluators_by_shift[shift] = {'error': str(e)}
                     raise e
 
-        return evaluators_by_shift
+        return dict(sorted(evaluators_by_shift.items()))
 
 
 
@@ -944,10 +994,10 @@ class WalletWorkflowOrchestrator:
 
 
     def _train_single_epoch_shift(
-        self,
-        epoch_shift: int,
-        concat_uris: dict[str, str]
-    ) -> dict:
+            self,
+            epoch_shift: int,
+            concat_uris: dict[str, str]
+        ) -> dict:
         """
         Train a model for a specific epoch shift using concatenated data.
 
@@ -1016,13 +1066,19 @@ class WalletWorkflowOrchestrator:
         return bucket_name, base_folder, folder_prefix
 
 
-    def _predict_single_epoch_shift(self, epoch_shift: int, concat_uris: dict) -> dict:
+    def _predict_single_epoch_shift(
+            self,
+            epoch_shift: int,
+            concat_uris: dict,
+            overwrite_existing: bool = False
+        ) -> dict:
         """
         Helper to predict test and val for a single epoch shift.
 
         Params:
         - epoch_shift (int): The epoch shift value
         - concat_uris (dict): S3 URIs for concatenated data
+        - overwrite_existing (bool): Whether to overwrite existing local predictions
 
         Returns:
         - dict: Prediction results for this epoch shift
@@ -1047,7 +1103,7 @@ class WalletWorkflowOrchestrator:
             raise e
 
         # Run batch predictions for test and val (this runs them in parallel internally)
-        pred_results = modeler.batch_predict_test_and_val()
+        pred_results = modeler.batch_predict_test_and_val(overwrite_existing=overwrite_existing)
 
         # Compile results
         return {

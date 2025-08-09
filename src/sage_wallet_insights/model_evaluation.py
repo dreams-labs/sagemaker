@@ -19,8 +19,14 @@ from utils import ConfigError
 
 
 # pylint:disable=invalid-name  # X isn't lowercase
+
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
+
+# Local control-flow exception used to skip epochs when filters remove all rows
+class SkipEpochEvaluation(Exception):
+    """Signal that this epoch has no rows after filtering and should be skipped."""
+    pass
 
 
 # --------------------------
@@ -170,12 +176,17 @@ def create_concatenated_sagemaker_evaluator(
 
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
+      (May return None if all rows are filtered out for the given epoch.)
     """
     # Apply custom transforms and get filtered data
-    y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
-        _apply_custom_transforms_to_concatenated_data(
-            wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val, epoch_shift
-        )
+    try:
+        y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
+            _apply_custom_transforms_to_concatenated_data(
+                wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val, epoch_shift
+            )
+    except SkipEpochEvaluation:
+        logger.warning("Skipping evaluation for epoch_shift=%s (all rows filtered out).", epoch_shift)
+        return None
 
     # For custom transforms, we still need to load train data normally
     y_train, X_train, _ = _load_concatenated_features(wallets_config)
@@ -298,7 +309,16 @@ def _process_concatenated_split(
     y_pred_epoch = y_pred_epoch_df["__pred__"].reset_index(drop=True)
 
     # 2) Custom feature filtering
-    X_filtered, row_mask = apply_custom_feature_filters(X_epoch, metadata, modeling_config)
+    try:
+        X_filtered, row_mask = apply_custom_feature_filters(X_epoch, metadata, modeling_config)
+    except ValueError as e:
+        # custom_transforms.apply_custom_feature_filters may raise when all rows are removed
+        if "All rows filtered out by custom filters" in str(e):
+            raise SkipEpochEvaluation("No rows remaining after custom feature filters.") from e
+        raise
+    # Defensive: if filtering returns an empty frame without raising, skip this epoch
+    if len(X_filtered) == 0:
+        raise SkipEpochEvaluation("No rows remaining after custom feature filters.")
 
     # 3) Align y and preds with the filter mask
     y_filtered = y_epoch[row_mask].reset_index(drop=True)
