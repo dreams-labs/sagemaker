@@ -6,8 +6,8 @@ framework:
 metaparams:
     endpoint_preds_dir: temp/endpoint_predictions
     # instance_type: local
-    instance_type: ml.m5.2xlarge
-    # instance_type: ml.m6i.2xlarge
+    # instance_type: ml.m5.2xlarge
+    instance_type: ml.m6i.2xlarge
     # instance_type: ml.c5.9xlarge
     # instance_type: ml.c6i.4xlarge
     instance_count: 1
@@ -25,20 +25,23 @@ script_mode:
 target:
     classification:
         threshold: 0.40  # if target > {threshold}, class = 1
-    target_var: crypto_net_gain/crypto_inflows/base
+    # target_var: cw_crypto_net_gain/crypto_inflows/base
+    target_var: cw_crypto_net_gain/crypto_inflows/winsorized
 
 training:
-    model_type: classification  # regression or classification
-    eval_metric: aucpr
+    model_type: regression  # regression or classification
+    eval_metric: rmse
+    # model_type: classification  # regression or classification
+    # eval_metric: aucpr
     # eval_metric: top_quantile
     custom_val:
         metric: cw_coin_return_winsorized # top_percentile of top_scores
         top_quantile: 0.01  # percent to apply validation
         top_scores: 0.8  # scores above this are validated
     custom_filters:
-        # cw_balance|total_usd_balance|w1:
-            # cli: cw_balance
-            # min: 20
+        cw_balance|total_usd_balance|w1:
+            cli: cw_balance
+            min: 100
             # max: 20
         # cw_trading|crypto_inflows|w1:
         #     cli: cw_inflows
@@ -47,14 +50,19 @@ training:
         # macro|btc_mvrv_z_score_last|w1:
         #     cli: btc_mvrv
         #     min: 1.
-        #     max: 10
-        # cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
-        #     cli: cw_mktcap
-        #     min: 5000000
+            # max: 4
+        # macro|btc_vdd_multiple_last|w1:
+        #     cli: btc_vdd
+        #     min: 0.3
+        #     max: 2.0
+        cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
+            cli: cw_mktcap
+            min: 25000000
         #     max: 4000000000  # 4 billion
         # trading|crypto_inflows|all_windows:
         # trading|unique_coins_traded|all_windows:
-        # macro|btc_vdd_multiple_last|w1:
+        #     cli: unique_coins
+        #     min: 5
         # balance|total_usd_balance|w1:
 
 
@@ -112,4 +120,4 @@ training:
         max_parallel_jobs: 10
 
 predicting:
-    y_pred_threshold: 0.8 # predictions above this are positive
+    y_pred_threshold: 0.5 # predictions above this are positive
