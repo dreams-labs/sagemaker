@@ -446,7 +446,10 @@ class WalletWorkflowOrchestrator:
 
     def train_all_epoch_shift_models(
         self,
-        concat_uris: dict[str, str]
+        concat_uris: dict[str, str],
+        retry_attempts: int = 3,
+        retry_delay_seconds: int = 30,
+        retry_backoff: float = 2.0,
     ) -> dict[int, dict]:
         """
         Train models for all epoch shifts using concatenated data with temporal filtering.
@@ -458,9 +461,13 @@ class WalletWorkflowOrchestrator:
         - epoch_shifts (list[int]): List of shift values (e.g., [0, 30, 60, 90, 120])
         - concat_uris (dict): S3 URIs for concatenated data splits
             {'train': s3://..., 'eval': s3://..., 'train_y': s3://..., 'eval_y': s3://...}
+        - retry_attempts (int): Number of times to retry if throttled.
+        - retry_delay_seconds (int): Initial delay (in seconds) before the first retry.
+        - retry_backoff (float): Multiplier applied to delay after each failed attempt (exponential backoff).
 
         Returns:
         - dict: Training results keyed by epoch_shift {shift: training_result}
+            Only successfully executed shifts are returned; failures after retries include 'error', 'type', and 'traceback'.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         if not epoch_shifts:
@@ -478,9 +485,12 @@ class WalletWorkflowOrchestrator:
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
             future_to_shift = {
                 executor.submit(
-                    self._train_single_epoch_shift,
+                    self._train_single_epoch_shift_with_retry,
                     shift,
-                    concat_uris
+                    concat_uris,
+                    retry_attempts,
+                    retry_delay_seconds,
+                    retry_backoff,
                 ): shift
                 for shift in epoch_shifts
             }
@@ -1123,6 +1133,47 @@ class WalletWorkflowOrchestrator:
         result['synthetic_suffix'] = synthetic_suffix
 
         return result
+
+
+    def _train_single_epoch_shift_with_retry(
+        self,
+        epoch_shift: int,
+        concat_uris: dict[str, str],
+        retry_attempts: int,
+        retry_delay_seconds: int,
+        retry_backoff: float,
+    ) -> dict:
+        """Call `_train_single_epoch_shift` with throttling-aware retries."""
+        attempt = 1
+        delay = max(0, int(retry_delay_seconds))
+        last_exc = None
+        max_attempts = max(1, int(retry_attempts))
+        while attempt <= max_attempts:
+            try:
+                return self._train_single_epoch_shift(epoch_shift, concat_uris)
+            except Exception as exc:  # noqa: BLE001
+                if self._is_throttling_error(exc) and attempt < max_attempts:
+                    logger.warning(
+                        "Throttled on training epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
+                        epoch_shift,
+                        attempt,
+                        max_attempts,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                    try:
+                        delay = int(delay * float(retry_backoff)) if retry_backoff else delay
+                    except Exception:
+                        pass
+                    attempt += 1
+                    last_exc = exc
+                    continue
+                last_exc = exc
+                break
+        if last_exc is not None:
+            raise last_exc
+        return {}
 
 
     def _get_s3_upload_paths(self) -> tuple[str, str, str]:
