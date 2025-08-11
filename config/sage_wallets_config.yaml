@@ -8,20 +8,20 @@ training_data: #SageMaker
 
     # local_directory: dda_945_filters_bal_s  # where to store local artifacts
     # upload_directory: dda-945-filt-bal-s  # new S3 folder name in bucket training_data_processed
-    local_directory: dda_951_eval_all_pr58  # where to store local artifacts
-    upload_directory: dda-951-eval-al-pr58  # new S3 folder name in bucket training_data_processed
+    local_directory: dda_951_eval_a_pr58_1  # where to store local artifacts
+    upload_directory: dda-951-eval-pr58-1  # new S3 folder name in bucket training_data_processed
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
     # Timings #KeyParam
     date_0: '200127' # the date that all offsets will be numbered relative to
     epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
-        # -360,
-        # -300,
-        # -240,
-        # -180,
-        # -120,
-        # -60,
+        -360,
+        -300,
+        -240,
+        -180,
+        -120,
+        -60,
         0,
         # 30,
         # 60,
@@ -136,9 +136,9 @@ training_data: #SageMaker
         # '241231',
         '250130',
         '250301',
-        '250331',
-        '250430',
-        '250530',
+        # '250331',
+        # '250430',
+        # '250530',
     ]
 
 preprocessing: #SageMaker
