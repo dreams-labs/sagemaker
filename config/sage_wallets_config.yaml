@@ -10,6 +10,7 @@ training_data: #SageMaker
     # upload_directory: dda-945-filt-bal-s  # new S3 folder name in bucket training_data_processed
     local_directory: dda_951_eval_remass  # where to store local artifacts
     upload_directory: dda-951-eval-remass  # new S3 folder name in bucket training_data_processed
+    download_directory: dda_951_eval_remass  # local directory where scores are stored
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
