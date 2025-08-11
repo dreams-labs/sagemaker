@@ -59,8 +59,9 @@ training:
             min: 25000000
             # max: 150000000
         # trading|crypto_inflows|all_windows:
-        # trading|unique_coins_traded|all_windows:
-        # macro|btc_vdd_multiple_last|w1:
+        trading|unique_coins_traded|all_windows:
+            cli: unique_coins
+            min: 5
         # balance|total_usd_balance|w1:
 
 

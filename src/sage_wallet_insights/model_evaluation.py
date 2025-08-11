@@ -218,7 +218,11 @@ def _process_concatenated_split(
     if len(X_full) != len(y_pred):
         raise ValueError(f"{split}: features rows ({len(X_full)}) must match y_pred rows ({len(y_pred)})")
 
-    # 1) Epoch-offset filtering (compute once and derive a boolean mask for alignment)
+    # If Validation set, the dates are 30 days later than their filename
+    if split == 'val':
+        epoch_shift = epoch_shift + 30
+
+    # 1) Epoch-offset filtering
     X_epoch, y_epoch = select_shifted_offsets(
         X_full, y_df, wallets_config, epoch_shift, split
     )

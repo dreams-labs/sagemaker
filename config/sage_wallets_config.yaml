@@ -13,8 +13,7 @@ training_data: #SageMaker
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
-    # Timings #KeyParam
-    date_0: '200127' # the date that all offsets will be numbered relative to
+    # Epochs #KeyParam
     epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
         -120,
         -60,
@@ -26,7 +25,9 @@ training_data: #SageMaker
         300,
         360
     ]
+    date_0: '200127' # the date that all offsets will be numbered relative to
 
+    # Offsets #KeyParam
     train_offsets: [
         # # '200127',
         # # '200226',
