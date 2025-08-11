@@ -184,4 +184,4 @@ n_threads: #SageMaker
     train_all_models: 10 # how many models to train concurrently
     predict_datasets: 2 # whether to score 'test' and 'val' sets concurrently
     predict_all_models: 4 # how many test/val pairs to score concurrently
-    evaluate_all_models: 4 # how many test/val pairs to score concurrently
+    evaluate_all_models: 2 # how many test/val pairs to score concurrently

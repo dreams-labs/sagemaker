@@ -4,7 +4,7 @@ from typing import Tuple, Union, Dict
 from pathlib import Path
 import json
 import pandas as pd
-
+import numpy as np
 
 # pylint:disable=wrong-import-position
 # ensure script_modeling directory is on path for its module
@@ -15,8 +15,8 @@ from custom_transforms import apply_custom_feature_filters, preprocess_custom_la
 # Import from data-science repo
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.model_evaluation as wime
+import utils as u
 from utils import ConfigError
-
 
 # pylint:disable=invalid-name  # X isn't lowercase
 
@@ -33,124 +33,7 @@ class SkipEpochEvaluation(Exception):
 #      Primary Interface
 # --------------------------
 
-def create_sagemaker_evaluator(
-    wallets_config: dict,
-    modeling_config: dict,
-    date_suffix: str,
-    y_test_pred: pd.Series,
-    y_val_pred: pd.Series
- ) -> Union[wime.RegressorEvaluator,wime.ClassifierEvaluator]:
-    """
-    Create a complete SageMaker wallet evaluator with all required data loaded.
-
-    Params:
-    - wallets_config (dict): Configuration for training data paths
-    - modeling_config (dict): Configuration for model parameters
-    - date_suffix (str): Date suffix for file naming
-    - y_test_pred (pd.Series): Predicted values for the test set
-    - y_test_val (pd.Series): Predicted values for the validation set
-
-    Returns:
-    - RegressorEvaluator: Configured evaluator ready for analysis
-    """
-    # 1. Load and Prepare Training Data
-    # ---------------------------------
-    model_type = modeling_config['training']['model_type']
-
-    # Load remaining training data
-    training_data_path = (
-        Path(f"{wallets_config['training_data']['local_s3_root']}")
-        / "s3_uploads"
-        / "wallet_training_data_queue"
-        / f"{wallets_config['training_data']['training_data_directory']}"
-    )
-    X_train = pd.read_parquet(training_data_path / f"x_train_{date_suffix}.parquet")
-    y_train = pd.read_parquet(training_data_path / f"y_train_{date_suffix}.parquet")
-    X_test = pd.read_parquet(training_data_path / f"x_test_{date_suffix}.parquet")
-    y_test = pd.read_parquet(training_data_path / f"y_test_{date_suffix}.parquet")
-    X_val = pd.read_parquet(training_data_path / f"x_val_{date_suffix}.parquet")
-    y_val = pd.read_parquet(training_data_path / f"y_val_{date_suffix}.parquet")
-
-    # Assign indices to pred arrays
-    y_test_pred = assign_index_to_pred(y_test_pred,y_test)
-    y_val_pred = assign_index_to_pred(y_val_pred,y_val)
-
-
-    # 2. Prepare wime modeling config
-    # -------------------------------
-    # Create modeling_config in format expected by wallet_insights.model_evaluation
-    wime_modeling_config = {
-        'target_variable': y_train.columns[0],
-        'model_type': model_type,
-        'returns_winsorization': 0.005,
-        'training_data': {
-            'modeling_period_duration': 30
-        },
-        'sagemaker_metadata': {
-            'local_directory': wallets_config['training_data']['local_directory'],
-            'date_suffix': date_suffix
-        }
-    }
-
-    # 3. Handle classification vars
-    # -----------------------------
-    if model_type == 'classification':
-        # Add y_pred_theshold to config
-        y_pred_thresh = modeling_config['predicting']['y_pred_threshold']
-        wime_modeling_config['y_pred_threshold'] = y_pred_thresh
-
-        y_pred_proba = y_test_pred
-        y_val_pred_proba = y_val_pred
-
-        # Apply y_pred_threshold to convert probabilities to binary predictions
-        y_test_pred = (y_test_pred > y_pred_thresh).astype(int)
-        y_val_pred = (y_val_pred > y_pred_thresh).astype(int)
-
-    # 4. Prepare model results
-    # ------------------------
-    # Create model_id
-    model_id = f"sagemaker_{wallets_config['training_data']['local_directory']}_{date_suffix}"
-
-    wallet_model_results = {
-        'model_id': model_id,
-        'modeling_config': wime_modeling_config,
-        'model_type': model_type,
-
-        # Training data
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train.iloc[:, 0],
-        'y_test': y_test.iloc[:, 0],
-        'y_pred': y_test_pred,
-        'training_cohort_pred': None,
-        'training_cohort_actuals': None,
-
-        # Validation data
-        'X_validation': X_val,
-        'y_validation': y_val.iloc[:, 0],
-        'y_val_pred': y_val_pred,
-        'y_val': y_val,
-
-        # Mock pipeline
-        'pipeline': create_mock_pipeline(model_type)
-    }
-
-    if model_type == 'classification':
-        wallet_model_results['y_pred_proba'] = y_pred_proba
-        wallet_model_results['y_val_pred_proba'] = y_val_pred_proba
-
-    # 5. Create and return evaluator
-    # ------------------------------
-    if model_type == 'regression':
-        wallet_evaluator = wime.RegressorEvaluator(wallet_model_results)
-    elif model_type == 'classification':
-        wallet_evaluator = wime.ClassifierEvaluator(wallet_model_results)
-    else:
-        raise ConfigError(f"Unknown model type {model_type} found in config.")
-
-    return wallet_evaluator
-
-
+@u.timing_decorator
 def create_concatenated_sagemaker_evaluator(
     wallets_config: dict,
     modeling_config: dict,
@@ -180,7 +63,8 @@ def create_concatenated_sagemaker_evaluator(
     """
     # Apply custom transforms and get filtered data
     try:
-        y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final = \
+        (y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final,
+         row_mask_val, epoch_mask_val) = \
             _apply_custom_transforms_to_concatenated_data(
                 wallets_config, modeling_config, y_test_pred, y_test, y_val_pred, y_val, epoch_shift
             )
@@ -190,7 +74,6 @@ def create_concatenated_sagemaker_evaluator(
 
     # For custom transforms, we still need to load train data normally
     y_train, X_train, _ = _load_concatenated_features(wallets_config)
-    target_var = y_test_final.name
     y_test_series = y_test_final
     y_test_pred = y_test_pred_final
 
@@ -200,9 +83,9 @@ def create_concatenated_sagemaker_evaluator(
     y_val_pred = y_val_pred_final if validation_provided else None
 
     # Continuous target variable (used for returns plots)
-    if 'target' not in modeling_config or 'target_variable' not in modeling_config['target']:
-        raise ConfigError("Missing 'target.target_variable' in modeling_config; required for returns plotting.")
-    cont_target_var = modeling_config['target']['target_variable']
+    if 'target' not in modeling_config or 'target_var' not in modeling_config['target']:
+        raise ConfigError("Missing 'target.target_var' in modeling_config; required for returns plotting.")
+    cont_target_var = modeling_config['target']['target_var']
     wime_modeling_config = {
         "target_variable": cont_target_var,
         "target_var_min_threshold": modeling_config['target']['classification']['threshold'],
@@ -243,7 +126,8 @@ def create_concatenated_sagemaker_evaluator(
     validation_target_vars_df = None
     if validation_provided:
         base_dir = Path(wallets_config['training_data']['local_s3_root'])
-        concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated' / wallets_config['training_data']['local_directory']
+        concat_dir = (base_dir / 's3_uploads' / 'wallet_training_data_concatenated' /
+                      wallets_config['training_data']['local_directory'])
 
         # Load full (unprocessed) validation target variables
         full_val_y_path = concat_dir / 'val_y.csv'
@@ -257,22 +141,11 @@ def create_concatenated_sagemaker_evaluator(
             )
         returns_col = cont_target_var
 
-        # Load features and metadata to reproduce the exact same masks used above
-        val_gz = concat_dir / 'val.csv.gz'
-        val_csv = concat_dir / 'val.csv'
-        val_x_path = val_gz.exists() and val_gz or val_csv
-        X_full_val = pd.read_csv(val_x_path, header=None, compression='infer')
-
-        meta_path = concat_dir / 'metadata.json'
-        with open(meta_path, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
-
-        # Apply identical offset selection and feature filtering to the raw returns
-        X_epoch_val, y_epoch_val = select_shifted_offsets(
-            X_full_val, full_val_y[[returns_col]], wallets_config, epoch_shift, 'val'
-        )
-        X_filtered_val, row_mask_val = apply_custom_feature_filters(X_epoch_val, meta, modeling_config)
-        returns_series_val = y_epoch_val[row_mask_val].reset_index(drop=True).iloc[:, 0].rename(cont_target_var)
+        # Reuse masks from the first pass to align raw validation returns:
+        # 1) epoch_mask_val reduces to the shifted offsets
+        # 2) row_mask_val reduces to rows kept by feature filters
+        y_epoch_returns = full_val_y.loc[epoch_mask_val, returns_col].reset_index(drop=True)
+        returns_series_val = y_epoch_returns[row_mask_val].reset_index(drop=True).rename(cont_target_var)
 
         # Final aligned DataFrame
         validation_target_vars_df = returns_series_val.to_frame(name=cont_target_var)
@@ -320,12 +193,18 @@ def _process_concatenated_split(
     y_pred: pd.Series,
     y_df: pd.DataFrame,
     epoch_shift: int
-) -> Tuple[pd.Series, pd.DataFrame, pd.Series]:
+) -> Tuple[pd.Series, pd.DataFrame, pd.Series, np.ndarray, np.ndarray]:
     """
     Common processing for 'test' and 'val':
     1) Epoch-offset selection via select_shifted_offsets
     2) Custom X filtering via apply_custom_feature_filters
     3) Align y and y_pred with masks; labels already preprocessed upstream.
+    Returns:
+    - y_final (Series)
+    - X_filtered (DataFrame)
+    - y_pred_filtered (Series)
+    - row_mask (np.ndarray): mask after feature filtering
+    - epoch_mask_full (np.ndarray): mask after epoch-offset selection
     """
     # Load raw features (first column is offset_date; no headers)
     gz_path = data_path / f"{split}.csv.gz"
@@ -339,15 +218,15 @@ def _process_concatenated_split(
     if len(X_full) != len(y_pred):
         raise ValueError(f"{split}: features rows ({len(X_full)}) must match y_pred rows ({len(y_pred)})")
 
-    # 1) Epoch-offset filtering
+    # 1) Epoch-offset filtering (compute once and derive a boolean mask for alignment)
     X_epoch, y_epoch = select_shifted_offsets(
         X_full, y_df, wallets_config, epoch_shift, split
     )
-    # For predictions, wrap as a DataFrame to reuse the same function
-    _, y_pred_epoch_df = select_shifted_offsets(
-        X_full, y_pred.to_frame("__pred__"), wallets_config, epoch_shift, split
-    )
-    y_pred_epoch = y_pred_epoch_df["__pred__"].reset_index(drop=True)
+    # Build a mask on the full frame for rows that survived epoch selection
+    allowed_offsets = set(X_epoch.iloc[:, 0].unique())
+    epoch_mask_full = X_full.iloc[:, 0].isin(allowed_offsets).to_numpy()
+    # Apply same epoch mask to predictions
+    y_pred_epoch = y_pred[epoch_mask_full].reset_index(drop=True)
 
     # 2) Custom feature filtering
     try:
@@ -375,8 +254,7 @@ def _process_concatenated_split(
             f"(X={len(X_filtered)}, y={len(y_final)}, y_pred={len(y_pred_filtered)})"
         )
 
-    return y_final, X_filtered, y_pred_filtered
-
+    return y_final, X_filtered, y_pred_filtered, row_mask, epoch_mask_full
 
 
 # Helper to load concatenated train/test features and y_train, and rename columns
@@ -500,7 +378,6 @@ def load_bt_sagemaker_predictions(
 
     return pred_series
 
-
 def load_concatenated_y(
     data_type: str,
     wallets_config: dict,
@@ -535,7 +412,7 @@ def load_concatenated_y(
 
     return target_df
 
-
+@u.timing_decorator()
 def _apply_custom_transforms_to_concatenated_data(
     wallets_config: dict,
     modeling_config: dict,
@@ -544,7 +421,8 @@ def _apply_custom_transforms_to_concatenated_data(
     y_val_pred: pd.Series = None,
     y_val: pd.DataFrame = None,
     epoch_shift: int = 0
-) -> Tuple[pd.Series, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
+) -> Tuple[pd.Series, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame,
+           pd.Series, np.ndarray, np.ndarray]:
     """
     Apply epoch-offset selection and custom feature filters to concatenated data for BOTH
     'test' and 'val'. Validation data must be provided.
@@ -556,6 +434,8 @@ def _apply_custom_transforms_to_concatenated_data(
     - y_val_final (Series)
     - X_val_final (DataFrame)
     - y_val_pred_final (Series)
+    - row_mask_val (np.ndarray): mask after feature filtering for val
+    - epoch_mask_val (np.ndarray): mask after epoch-offset selection for val
     """
     # Resolve paths
     base_dir = Path(wallets_config["training_data"]["local_s3_root"])
@@ -575,17 +455,18 @@ def _apply_custom_transforms_to_concatenated_data(
         raise ValueError("Validation data (y_val and y_val_pred) must be provided.")
 
     # Process splits identically
-    y_test_final, X_test_final, y_test_pred_final = _process_concatenated_split(
+    y_test_final, X_test_final, y_test_pred_final, _, _ = _process_concatenated_split(
         "test", wallets_config, modeling_config, data_path, metadata,
         y_test_pred, y_test, epoch_shift
     )
 
-    y_val_final, X_val_final, y_val_pred_final = _process_concatenated_split(
+    y_val_final, X_val_final, y_val_pred_final, row_mask_val, epoch_mask_val = _process_concatenated_split(
         "val", wallets_config, modeling_config, data_path, metadata,
         y_val_pred, y_val, epoch_shift
     )
 
-    return y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final
+    return (y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final,
+            row_mask_val, epoch_mask_val)
 
 
 # --------------------------
@@ -635,7 +516,6 @@ def assign_index_to_pred(
         raise ValueError(f"Found {nan_count} NaN values in predictions.")
 
     return aligned_pred_series
-
 
 
 def create_mock_pipeline(model_type):

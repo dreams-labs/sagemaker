@@ -25,12 +25,18 @@ script_mode:
 target:
     classification:
         threshold: 0.40  # if target > {threshold}, class = 1
-    target_var: crypto_net_gain/crypto_inflows/base
+    # target_var: crypto_net_gain/crypto_inflows/base
+    target_var: cw_crypto_net_gain/crypto_inflows/base
     # target_var: crypto_net_gain/crypto_inflows/base
 
+predicting:
+    y_pred_threshold: 0.5 # predictions above this are positive
+
 training:
-    model_type: classification  # regression or classification
-    eval_metric: aucpr
+    model_type: regression
+    eval_metric: rmse
+    # model_type: classification  # regression or classification
+    # eval_metric: aucpr
     # eval_metric: top_quantile
     custom_val:
         metric: cw_coin_return # top_percentile of top_scores
@@ -104,6 +110,3 @@ training:
         # max_jobs: 1
         max_jobs: 50
         max_parallel_jobs: 10
-
-predicting:
-    y_pred_threshold: 0.8 # predictions above this are positive
