@@ -199,9 +199,12 @@ def create_concatenated_sagemaker_evaluator(
     y_val_series = y_val_final if validation_provided else None
     y_val_pred = y_val_pred_final if validation_provided else None
 
-    # Build modeling config for evaluator
+    # Continuous target variable (used for returns plots)
+    if 'target' not in modeling_config or 'target_variable' not in modeling_config['target']:
+        raise ConfigError("Missing 'target.target_variable' in modeling_config; required for returns plotting.")
+    cont_target_var = modeling_config['target']['target_variable']
     wime_modeling_config = {
-        "target_variable": target_var,
+        "target_variable": cont_target_var,
         "target_var_min_threshold": modeling_config['target']['classification']['threshold'],
         "model_type": modeling_config["training"]["model_type"],
         "returns_winsorization": 0.005,
@@ -236,6 +239,44 @@ def create_concatenated_sagemaker_evaluator(
     else:
         y_validation_pred = y_val_pred if validation_provided else None
 
+    # Build aligned continuous returns for validation (for return-vs-score plots)
+    validation_target_vars_df = None
+    if validation_provided:
+        base_dir = Path(wallets_config['training_data']['local_s3_root'])
+        concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated' / wallets_config['training_data']['local_directory']
+
+        # Load full (unprocessed) validation target variables
+        full_val_y_path = concat_dir / 'val_y.csv'
+        if not full_val_y_path.exists():
+            raise FileNotFoundError(f"Missing raw validation targets at {full_val_y_path}")
+        full_val_y = pd.read_csv(full_val_y_path)
+        if cont_target_var not in full_val_y.columns:
+            raise ConfigError(
+                f"Expected returns column '{cont_target_var}' not found in {full_val_y_path}. "
+                f"Available columns: {full_val_y.columns.tolist()}"
+            )
+        returns_col = cont_target_var
+
+        # Load features and metadata to reproduce the exact same masks used above
+        val_gz = concat_dir / 'val.csv.gz'
+        val_csv = concat_dir / 'val.csv'
+        val_x_path = val_gz.exists() and val_gz or val_csv
+        X_full_val = pd.read_csv(val_x_path, header=None, compression='infer')
+
+        meta_path = concat_dir / 'metadata.json'
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+
+        # Apply identical offset selection and feature filtering to the raw returns
+        X_epoch_val, y_epoch_val = select_shifted_offsets(
+            X_full_val, full_val_y[[returns_col]], wallets_config, epoch_shift, 'val'
+        )
+        X_filtered_val, row_mask_val = apply_custom_feature_filters(X_epoch_val, meta, modeling_config)
+        returns_series_val = y_epoch_val[row_mask_val].reset_index(drop=True).iloc[:, 0].rename(cont_target_var)
+
+        # Final aligned DataFrame
+        validation_target_vars_df = returns_series_val.to_frame(name=cont_target_var)
+
     wallet_model_results = {
         "model_id": model_uri,
         "modeling_config": wime_modeling_config,
@@ -249,7 +290,7 @@ def create_concatenated_sagemaker_evaluator(
         "training_cohort_actuals": None,
         "X_validation": X_val_final,
         "y_validation": y_val_series,
-        "validation_target_vars_df": y_val,
+        "validation_target_vars_df": validation_target_vars_df,
         "y_validation_pred": y_validation_pred,
         "pipeline": create_mock_pipeline(model_type)
     }
