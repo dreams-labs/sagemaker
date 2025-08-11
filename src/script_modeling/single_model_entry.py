@@ -119,12 +119,10 @@ def main() -> None:
     """
     # Load config JSONs
     wallets_config, modeling_config = h.load_configs()
-    print(wallets_config)
-    print(modeling_config)
 
     # Load booster params from CLI arguments
     args = h.load_hyperparams(modeling_config)
-    booster_params = h.build_booster_params(args)
+    booster_params = h.build_booster_params(args, modeling_config)
 
     # Apply CLI filter overrides to config
     modeling_config = ct.apply_cli_filter_overrides(modeling_config, args)
@@ -134,23 +132,25 @@ def main() -> None:
         wallets_config, modeling_config, booster_params
     )
 
-    # Load raw validation targets and pick custom eval function
+    # Load raw validation targets and pick eval function
     val_y_dir = Path(os.environ["SM_CHANNEL_VALIDATION_Y"])
     df_val_y_raw = pd.read_csv(val_y_dir / "eval_y.csv")
-    feval_fn = h.get_eval_function(modeling_config, df_val_y_raw)
+    feval_fn, maximize = h.get_eval_function(modeling_config, df_val_y_raw)
 
-
-    # Train with early stopping and per-round PR-AUC logging
-    booster = xgb.train(
+    # Identify keywords and set booster
+    train_kwargs = dict(
         params=booster_params,
         dtrain=training_matrix,
         num_boost_round=args.num_boost_round,
         evals=[(validation_matrix, "eval")],
         early_stopping_rounds=args.early_stopping_rounds,
-        feval=feval_fn,
-        maximize=True,
         verbose_eval=1,
     )
+    if feval_fn is not None:
+        train_kwargs["feval"] = feval_fn
+        # Only set maximize when using custom feval (built-in rmse/mae know direction)
+        train_kwargs["maximize"] = bool(maximize)
+    booster = xgb.train(**train_kwargs)
 
     # Persist model artifacts to relative paths within the container
     model_output_dir = Path(os.environ.get("SM_MODEL_DIR", "/opt/ml/model"))

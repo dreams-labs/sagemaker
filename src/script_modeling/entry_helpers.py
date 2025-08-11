@@ -156,14 +156,20 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
     return xgb.DMatrix(features, label=labels)
 
 
-def build_booster_params(args: argparse.Namespace) -> dict:
+def build_booster_params(args: argparse.Namespace, modeling_config: dict) -> dict:
     """Construct XGBoost params by automatically unpacking all provided hyperparameters."""
     # Base parameters that are always included
-    params = {
-        "objective": "binary:logistic",
-        "eval_metric": "aucpr",
-        "seed": 42,
-    }
+    params = {"seed": 42}
+    if modeling_config["training"]["model_type"] == "regression":
+        params.update({
+            "objective": "reg:squarederror",            # or reg:squaredlogerror
+            "eval_metric": modeling_config["training"].get("eval_metric", "rmse"),
+        })
+    else:
+        params.update({
+            "objective": "binary:logistic",
+            "eval_metric": modeling_config["training"].get("eval_metric", "aucpr"),
+        })
 
     # Convert args to dict and add all non-None hyperparameters
     args_dict = vars(args)
@@ -228,15 +234,22 @@ def eval_top_quantile(df_val_y_raw: pd.DataFrame, metric_col: str, top_pct: floa
 
 def get_eval_function(config: dict, df_val_y_raw: pd.DataFrame):
     """
-    Select and return the appropriate XGBoost feval based on modeling config.
+    Returns (feval_fn, maximize). For regression, usually None to rely on built-in metrics.
     """
-    method = config['training']['eval_metric']
+    model_type = config['training']['model_type']
+    method = config['training'].get('eval_metric', 'aucpr')
     custom_val = config['training'].get('custom_val', {})
     metric_col = custom_val.get('metric')
-    if method == 'aucpr':
-        return eval_aucpr
-    elif method == 'top_quantile':
-        top_pct = custom_val['top_quantile']
-        return eval_top_quantile(df_val_y_raw, metric_col, top_pct)
+    top_pct = custom_val.get('top_quantile', 0.1)
 
-    return eval_aucpr
+    if model_type == 'regression':
+        # Option A: rely on built-in metric (rmse/mae) -> no custom feval
+        if method != 'top_quantile':
+            return None, None
+        # Option B (optional): keep custom ranking metric for regression
+        return eval_top_quantile(df_val_y_raw, metric_col, top_pct), True
+
+    # classification
+    if method == 'top_quantile':
+        return eval_top_quantile(df_val_y_raw, metric_col, top_pct), True
+    return eval_aucpr, True  # default for classification

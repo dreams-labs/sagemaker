@@ -37,6 +37,7 @@ class TrainingDataConfig(BaseModel):
     training_data_directory: str = Field(...)
     local_directory: str = Field(...)
     upload_directory: str = Field(...)
+    download_directory: str = Field(...)
     dataset: str = Field(...)
     date_0: int = Field(...)
     train_offsets: List[str] = Field(...)

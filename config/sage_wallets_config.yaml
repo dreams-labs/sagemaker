@@ -8,56 +8,60 @@ training_data: #SageMaker
 
     # local_directory: dda_945_filters_bal_s  # where to store local artifacts
     # upload_directory: dda-945-filt-bal-s  # new S3 folder name in bucket training_data_processed
-    local_directory: dda_951_eval_all  # where to store local artifacts
-    upload_directory: dda-951-eval-all  # new S3 folder name in bucket training_data_processed
+    local_directory: dda_951_eval_remass  # where to store local artifacts
+    upload_directory: dda-951-eval-remass  # new S3 folder name in bucket training_data_processed
+    download_directory: dda_951_eval_remass  # local directory where scores are stored
 
-    dataset: dev  # Set to prod or dev; determines whether to query core or dev dataset tables
+    dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
-    # Timings #KeyParam
-    date_0: '200127' # the date that all offsets will be numbered relative to
+    # Epochs #KeyParam
     epoch_shifts: [  # a model will be constructed for each of these shifts from the base offsets
-        # -60,
+        -120,
+        -60,
         0,
-        60,
-        # 120,
-        # 180,
-        # 240,
-        # 300
+        # 60,
+        120,
+        180,
+        240,
+        300,
+        360
     ]
+    date_0: '200127' # the date that all offsets will be numbered relative to
 
+    # Offsets #KeyParam
     train_offsets: [
-        # '200127',
-        # '200226',
-        # '200327',
-        # '200426',
-        # '200526',
-        # '200625',
-        # '200725',
-        # '200824',
-        # '200923',
-        # '201023',
-        # '201122',
-        # '201222',
-        # '210121',
-        # '210220',
-        # '210322',
-        # '210421',
-        # '210521',
-        # '210620',
-        # '210720',
-        # '210819',
-        # '210918',
-        # '211018',
-        # '211117',
-        # '211217',
-        # '220116',
-        # '220215',
-        # '220317',
-        # '220416',
-        # '220516',
-        # '220615',
-        # '220715',
-        # '220814',
+        # # '200127',
+        # # '200226',
+        # # '200327',
+        # # '200426',
+        # # '200526',
+        # # '200625',
+        # # '200725',
+        # # '200824',
+        # # '200923',
+        # # '201023',
+        # # '201122',
+        # # '201222',
+        # # '210121',
+        # # '210220',
+        # # '210322',
+        # # '210421',
+        # # '210521',
+        # # '210620',
+        # # '210720',
+        # # '210819',
+        # # '210918',
+        # # '211018',
+        # # '211117',
+        # # '211217',
+        # # '220116',
+        # # '220215',
+        # # '220317',
+        # # '220416',
+        # # '220516',
+        # # '220615',
+        # # '220715',
+        # # '220814',
         # '220913',
         # '221013',
         # '221112',
@@ -67,60 +71,90 @@ training_data: #SageMaker
         # '230312',
         # '230411',
         # '230511',
-        '230610',
-        '230710',
+        # '230610',
+        # '230710',
         # '230809',
-        '230908',
+        # '230908',
         # '231008',
-        '231107',
-        # # '231207',
-        '240106',
-        # '240205',
-        '240306',
-        # '240405',
+        # '231107',
+        # '231207',
+        # '240106',
+        # # '240205',
+        # '240306',
+        # # '240405',
         # '240505',
-        # '240604',
+        # # '240604',
         # '240704',
-        # '240803',
+        # # '240803',
         # '240902',
-        # '241002',
+        # # '241002',
         # '241101',
-        # '241201',
+        # # '241201',
         # '241231',
-        # '250130',
-        # '250301',
-        # '250331',
-        # '250430',
-        # '250530',
+        # # '250130',
+        # # '250301',
+        # # '250331',
+        # # '250430',
+        # # '250530',
+        "210720",
+        "210819",
+        "210918",
+        "211018",
+        "211117",
+        "211217",
+        "220116",
+        "220215",
+        "220317",
+        "220416",
+        "220516",
+        "220615",
+        "220715",
+        "220814",
+        "220913",
+        "221013",
+        "221112",
+        "221212",
+        "230111",
+        "230210",
+        "230312",
+        "230411",
+        "230511",
+        "230610",
+        "230710",
+        "230809",
+        "231008",
+        "231207",
+        "240205",
+        "240405"
+
     ]
     eval_offsets: [
-        '230809',
-        '230908',
-        '231008',
-        '231107',
-        '231207',
-        '240106',
-        '240205',
-        '240306',
-        '240405',
+        "230809",
+        "230908",
+        "231008",
+        "231107",
+        "231207",
+        "240106",
+        "240205",
+        "240306",
+        "240405"
     ]
     test_offsets: [
-        '230809',
-        '230908',
-        '231008',
-        '231107',
-        '231207',
-        '240106',
-        '240205',
-        '240306',
-        '240405',
-        '240505',
-        '240604',
+        "230809",
+        "230908",
+        "231008",
+        "231107",
+        "231207",
+        "240106",
+        "240205",
+        "240306",
+        "240405"
+
     ]
     val_offsets: [  # val data is 1 month later than these modeling_period_start dates
-        '240604',
-        '240704',
-        '240803',
+        "240405",
+        "240505",
+        "240604"
     ]
 
 preprocessing: #SageMaker
@@ -151,5 +185,5 @@ n_threads: #SageMaker
     upload_all_training_data: 4 # how many uploads to perform concurrently
     train_all_models: 10 # how many models to train concurrently
     predict_datasets: 2 # whether to score 'test' and 'val' sets concurrently
-    predict_all_models: 10 # how many test/val pairs to score concurrently
-    evaluate_all_models: 4 # how many test/val pairs to score concurrently
+    predict_all_models: 4 # how many test/val pairs to score concurrently
+    evaluate_all_models: 2 # how many test/val pairs to score concurrently

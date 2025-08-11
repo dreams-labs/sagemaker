@@ -666,7 +666,7 @@ class WalletModeler:
         # Construct standardized local path
         local_path = (f"{self.wallets_config['training_data']['local_s3_root']}/"
                       f"s3_downloads/wallet_predictions/"
-                      f"{self.wallets_config['training_data']['local_directory']}/"
+                      f"{self.wallets_config['training_data']['download_directory']}/"
                       f"{self.date_suffix}/"
                       f"{dataset_type}.csv.out")
 
