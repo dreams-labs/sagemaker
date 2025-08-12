@@ -266,20 +266,19 @@ class SageWalletsPreprocessor:
         offset_dates = df.index.get_level_values('epoch_start_date')
 
         # Convert to days since reference date (as float32 for XGBoost)
-        # This gives us integers like 30, 60, 90 for monthly offsets
         offset_days = (offset_dates - reference_date).days.astype('float32')
 
-        # Reset index first to work with clean DataFrame
-        df = df.reset_index(drop=True)
+        # Create offset_date column as DataFrame
+        offset_col = pd.DataFrame({'offset_date': offset_days}, index=df.index)
 
-        # Insert offset_date as first column
-        df.insert(0, 'offset_date', offset_days)
+        # Concatenate offset column with existing DataFrame
+        result_df = pd.concat([offset_col, df], axis=1)
 
         # Log the range of offset dates for debugging
         logger.debug(f"Offset dates range: {offset_days.min():.0f} to {offset_days.max():.0f} "
                     f"days from {reference_date.strftime('%Y-%m-%d')}")
 
-        return df
+        return result_df
 
 
     def _validate_index_alignment(
@@ -384,15 +383,16 @@ class SageWalletsPreprocessor:
 
         return metadata
 
+
     def _save_preprocessed_df(self, df: pd.DataFrame, split_name: str) -> None:
         """
-        Save a single preprocessed DataFrame to local CSV file in date-specific folder.
-        Format matches exactly what gets uploaded to S3 for SageMaker.
+        Save a single preprocessed DataFrame as parquet preserving complete index.
+        CSV and index extraction happens during concatenation step.
         """
         if not hasattr(self, 'date_suffix') or not self.date_suffix:
             raise ValueError("date_suffix must be set before saving preprocessed data")
 
-         # Guard: do not write files with NaNs
+        # Guard: do not write files with NaNs
         if df.isnull().values.any():
             cols_with_na = df.columns[df.isnull().any()].tolist()
             logger.error(
@@ -404,12 +404,15 @@ class SageWalletsPreprocessor:
                 f"columns {cols_with_na}"
             )
 
-        # Create date-specific folder structure matching S3 upload pattern
+        # Validate index has required levels
+        if 'wallet_address' not in df.index.names:
+            raise ValueError(f"Index must contain 'wallet_address' level, found: {df.index.names}")
+
+        # Create date-specific folder structure
         date_folder = self.output_base / self.date_suffix
         date_folder.mkdir(exist_ok=True)
 
-        filename = f"{split_name}.csv"
-        filepath = date_folder / filename
-
-        df.to_csv(filepath, index=False, header=False)
-        logger.info(f"Saved preprocessed {split_name} split to {filepath}")
+        # Save complete DataFrame as parquet (preserves everything)
+        parquet_filepath = date_folder / f"{split_name}.parquet"
+        df.to_parquet(parquet_filepath, index=True)
+        logger.info(f"Saved preprocessed {split_name} to {parquet_filepath}")

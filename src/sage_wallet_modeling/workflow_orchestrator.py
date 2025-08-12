@@ -182,27 +182,19 @@ class WalletWorkflowOrchestrator:
 
 
     @u.timing_decorator
-    def concatenate_all_preprocessed_data(self, repreprocess_offsets: bool = True) -> None:
+    def concatenate_all_preprocessed_data(self) -> None:
         """
-        Concatenate preprocessed CSVs across configured offsets for each split and
-        save combined CSVs to the concatenated output directory.
-
-        Applies fresh preprocessing with temporal filtering to prevent data overlap
-        when concatenate_offsets is enabled.
+        Concatenate preprocessed Parquet files across configured offsets for each split,
+        save combined feature CSVs (no headers/indices) to the concatenated output
+        directory, and also save the concatenated index (only) as a Parquet sidecar.
 
         Exports separate y-files for test and val splits using RAW (non-preprocessed)
         y values for evaluation purposes.
-        :param bool repreprocess_offsets: if False, skip re-running preprocessing and load existing CSVs.
         """
-        # Preprocess all data from scratch to ensure temporal filtering is applied
-        if repreprocess_offsets:
-            data_by_date = self.preprocess_all_training_data()
-        else:
-            # Skip reprocessing and load saved preprocessed CSVs
-            logger.info("Loading preprocessed training data...")
-            data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
+        logger.info("Loading preprocessed training data...")
+        data_by_date = self._load_preprocessed_training_data(self.date_suffixes)
 
-        logger.info("Beginning concatenation of preprocessed data...")
+        logger.info("Beginning concatenation of preprocessed data from Parquet...")
         # Determine offsets for each split from config
         split_requirements = calculate_comprehensive_offsets_by_split(self.wallets_config)
 
@@ -223,7 +215,7 @@ class WalletWorkflowOrchestrator:
                 df_loaded = data_by_date[offset][split]
                 if df_loaded.isnull().values.any():
                     bad_cols = df_loaded.columns[df_loaded.isnull().any()].tolist()
-                    raise ValueError(f"NaNs detected in loaded preprocessed CSV for "
+                    raise ValueError(f"NaNs detected in loaded preprocessed Parquet for "
                                      f"{offset}/{split}: columns {bad_cols}")
                 ncols_by_date[offset] = df_loaded.shape[1]
             if len(set(ncols_by_date.values())) != 1:
@@ -256,14 +248,25 @@ class WalletWorkflowOrchestrator:
                 logger.warning(f"No data found for split '{split}' across offsets {offsets}")
                 continue
 
-            # Validate no NaNs before saving
-            concatenated = pd.concat(dfs, ignore_index=True)
+            # Concatenate preserving index (multi-index expected) and validate
+            concatenated = pd.concat(dfs, axis=0)
             if concatenated.isnull().any().any():
                 raise ValueError(f"NaN values detected in {split} split before saving to CSV")
 
+            # Write index-only sidecar as Parquet (row-aligned with features)
+            index_out_file = concat_base / f"{split}_index.parquet"
+            index_df = concatenated.index.to_frame(index=False)
+            index_df.to_parquet(index_out_file, index=False)
+            logger.info(
+                f"Saved concatenated {split}_index.parquet with {len(index_df)} rows to {index_out_file}"
+            )
+
+            # Write features as CSV.gz (no header, no index) for SageMaker compatibility
             out_file = concat_base / f"{split}.csv.gz"
             concatenated.to_csv(out_file, index=False, header=False, compression='gzip')
-            logger.info(f"Saved concatenated {split}.csv.gz with {len(concatenated)} rows to {out_file}")
+            logger.info(
+                f"Saved concatenated {split}.csv.gz with {len(concatenated)} rows to {out_file}"
+            )
 
         # Add this after the main concatenation loop, before the y-file exports
         logger.info("Copying metadata for concatenated dataset...")
@@ -305,7 +308,6 @@ class WalletWorkflowOrchestrator:
 
         # Always export full y for all splits with header
         y_splits_to_export = ['train', 'eval', 'test', 'val']
-        include_header = True
         for split in y_splits_to_export:
             split_offsets = offsets_map.get(split, [])
             if not split_offsets:
@@ -331,7 +333,7 @@ class WalletWorkflowOrchestrator:
 
             concatenated_y = pd.concat(y_dfs, ignore_index=True)
             y_out_file = concat_base / f"{split}_y.csv"
-            concatenated_y.to_csv(y_out_file, index=False, header=include_header)
+            concatenated_y.to_csv(y_out_file, index=False, header=True)
             logger.info(f"Saved concatenated {split}_y.csv with {len(concatenated_y)} "
                         f"rows to {y_out_file}")
 
@@ -467,7 +469,8 @@ class WalletWorkflowOrchestrator:
 
         Returns:
         - dict: Training results keyed by epoch_shift {shift: training_result}
-            Only successfully executed shifts are returned; failures after retries include 'error', 'type', and 'traceback'.
+            Only successfully executed shifts are returned; failures after retries include
+            'error', 'type', and 'traceback'.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         if not epoch_shifts:
@@ -660,7 +663,8 @@ class WalletWorkflowOrchestrator:
 
         Returns:
         - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}} for shifts executed.
-            Only successfully executed shifts are returned. Failures after retries are included with an 'error' key as before.
+            Only successfully executed shifts are returned. Failures after retries are included
+            with an 'error' key as before.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         n_threads = self.wallets_config['n_threads']['predict_all_models']
@@ -901,7 +905,7 @@ class WalletWorkflowOrchestrator:
 
     def _load_preprocessed_training_data(self, date_suffixes: list) -> dict:
         """
-        Load preprocessed CSV files for upload, ensuring perfect consistency
+        Load preprocessed Parquet files for upload, ensuring perfect consistency
         between saved files and uploaded data.
         """
         # Get the preprocessed data directory from SageWalletsPreprocessor logic
@@ -917,30 +921,27 @@ class WalletWorkflowOrchestrator:
         for date_suffix in date_suffixes:
             date_data = {}
 
-            # Load CSV files from date-specific folder
+            # Load Parquet files from date-specific folder (index preserved)
             date_folder = preprocessed_dir / date_suffix
             if not date_folder.exists():
                 raise FileNotFoundError(f"Date folder not found: {date_folder}")
 
             for split_name in splits:
-                # Prefer gzip if present; fall back to plain CSV for backward compatibility
-                gz_path = date_folder / f"{split_name}.csv.gz"
-                csv_path = date_folder / f"{split_name}.csv"
-                filepath = gz_path if gz_path.exists() else csv_path
+                # Load Parquet files from date-specific folder (index preserved)
+                parquet_path = date_folder / f"{split_name}.parquet"
+                if not parquet_path.exists():
+                    raise FileNotFoundError(f"Preprocessed file not found: {parquet_path}")
 
-                if not filepath.exists():
-                    raise FileNotFoundError(f"Preprocessed file not found: {gz_path} or {csv_path}")
-
-                date_data[split_name] = pd.read_csv(filepath, header=None, compression='infer')
-                # Validate: no NaNs in any loaded preprocessed CSV (guards against ragged rows, etc.)
+                date_data[split_name] = pd.read_parquet(parquet_path)
+                # Validate: no NaNs in any loaded preprocessed Parquet
                 if date_data[split_name].isnull().values.any():
                     bad_cols = date_data[split_name].columns[date_data[split_name].isnull().any()].tolist()
                     logger.error(
-                        "NaNs found in preprocessed CSV for %s/%s; columns with NaNs: %s",
+                        "NaNs found in preprocessed Parquet for %s/%s; columns with NaNs: %s",
                         date_suffix, split_name, bad_cols
                     )
                     raise ValueError(
-                        f"NaNs found in preprocessed CSV for {date_suffix}/{split_name}: columns {bad_cols}"
+                        f"NaNs found in preprocessed Parquet for {date_suffix}/{split_name}: columns {bad_cols}"
                     )
 
             # Load metadata from the same folder
