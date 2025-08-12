@@ -72,7 +72,6 @@ def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
 
     return result
 
-
 def select_shifted_offsets(
     df_x_full: pd.DataFrame,
     df_y_full: pd.DataFrame,
@@ -98,6 +97,7 @@ def select_shifted_offsets(
     - Get base train_offsets from wallets_config
     - Apply epoch_shift to get target offset_days
     - Filter both DataFrames to only include rows with matching offset_date values
+    - Drop offset_date column from filtered X data
     """
     # Extract offset_date column (first column of df_x_full)
     offset_dates = df_x_full.iloc[:, 0]
@@ -115,6 +115,9 @@ def select_shifted_offsets(
     # Apply identical filtering to both X and Y
     df_x_filtered = df_x_full[mask].reset_index(drop=True)
     df_y_filtered = df_y_full[mask].reset_index(drop=True)
+
+    # Drop the offset_date column from X features
+    df_x_filtered = df_x_filtered.iloc[:, 1:]
 
     return df_x_filtered, df_y_filtered
 
@@ -184,7 +187,8 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
         # Return all rows (no filtering applied)
         return df_x, np.ones(len(df_x), dtype=bool)
 
-    feature_columns = metadata['feature_columns']
+    # Select feature columns excluding 'offset_days'
+    feature_columns = metadata['feature_columns'][1:]
 
     # Validate feature list length matches X df
     if len(feature_columns) != df_x.shape[1]:
