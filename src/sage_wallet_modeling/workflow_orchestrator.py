@@ -743,78 +743,6 @@ class WalletWorkflowOrchestrator:
         text = str(exc)
         return ("Rate exceeded" in text) or ("Throttling" in text)
 
-    def _predict_single_epoch_shift_with_retry(
-        self,
-        epoch_shift: int,
-        concat_uris: dict[str, str],
-        overwrite_existing: bool,
-        retry_attempts: int,
-        retry_delay_seconds: int,
-        retry_backoff: float,
-    ) -> dict:
-        """Call `_predict_single_epoch_shift` with throttling-aware retries."""
-        attempt = 1
-        delay = max(0, int(retry_delay_seconds))
-        last_exc = None
-        while attempt <= max(1, int(retry_attempts)):
-            try:
-                return self._predict_single_epoch_shift(epoch_shift, concat_uris, overwrite_existing)
-            except Exception as exc:  # noqa: BLE001 - we intentionally catch broadly to detect throttling
-                if self._is_throttling_error(exc) and attempt < max(1, int(retry_attempts)):
-                    logger.warning(
-                        "Throttled on epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
-                        epoch_shift,
-                        attempt,
-                        retry_attempts,
-                        delay,
-                        exc,
-                    )
-                    time.sleep(delay)
-                    # Exponential backoff for next attempt
-                    try:
-                        delay = int(delay * float(retry_backoff)) if retry_backoff else delay
-                    except Exception:
-                        # If backoff isn't a valid float, keep the same delay
-                        pass
-                    attempt += 1
-                    last_exc = exc
-                    continue
-                # Non-throttling error or final attempt exhausted
-                last_exc = exc
-                break
-        # If we reach here, all attempts failed
-        if last_exc is not None:
-            raise last_exc
-        # Should never get here, but return {} to satisfy type checker
-        return {}
-
-    def _local_predictions_exist(self, epoch_shift: int) -> bool:
-        """
-        Check whether both test and val local prediction files already exist and are non-empty
-        for a given epoch_shift (sh{epoch_shift}).
-
-        Returns:
-        - bool: True if both files exist and have size > 0.
-        """
-        local_root = (
-            Path(self.wallets_config['training_data']['local_s3_root'])
-            / "s3_downloads"
-            / "wallet_predictions"
-            / self.wallets_config['training_data']['local_directory']
-            / f"sh{epoch_shift}"
-        )
-        test_path = local_root / "test.csv.out"
-        val_path = local_root / "val.csv.out"
-
-        try:
-            return (
-                test_path.exists() and test_path.stat().st_size > 0 and
-                val_path.exists() and val_path.stat().st_size > 0
-            )
-        except OSError:
-            # If stat() fails for any reason, treat as non-existent to be safe
-            return False
-
 
     @u.timing_decorator
     def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
@@ -1197,6 +1125,34 @@ class WalletWorkflowOrchestrator:
         return bucket_name, base_folder, folder_prefix
 
 
+    def _local_predictions_exist(self, epoch_shift: int) -> bool:
+        """
+        Check whether both test and val local prediction files already exist and are non-empty
+        for a given epoch_shift (sh{epoch_shift}).
+
+        Returns:
+        - bool: True if both files exist and have size > 0.
+        """
+        local_root = (
+            Path(self.wallets_config['training_data']['local_s3_root'])
+            / "s3_downloads"
+            / "wallet_predictions"
+            / self.wallets_config['training_data']['local_directory']
+            / f"sh{epoch_shift}"
+        )
+        test_path = local_root / "test.csv.out"
+        val_path = local_root / "val.csv.out"
+
+        try:
+            return (
+                test_path.exists() and test_path.stat().st_size > 0 and
+                val_path.exists() and val_path.stat().st_size > 0
+            )
+        except OSError:
+            # If stat() fails for any reason, treat as non-existent to be safe
+            return False
+
+
     def _predict_single_epoch_shift(
             self,
             epoch_shift: int,
@@ -1244,6 +1200,52 @@ class WalletWorkflowOrchestrator:
             'training_job_name': model_info.get('training_job_name'),
             'epoch_shift': epoch_shift
         }
+
+
+    def _predict_single_epoch_shift_with_retry(
+        self,
+        epoch_shift: int,
+        concat_uris: dict[str, str],
+        overwrite_existing: bool,
+        retry_attempts: int,
+        retry_delay_seconds: int,
+        retry_backoff: float,
+    ) -> dict:
+        """Call `_predict_single_epoch_shift` with throttling-aware retries."""
+        attempt = 1
+        delay = max(0, int(retry_delay_seconds))
+        last_exc = None
+        while attempt <= max(1, int(retry_attempts)):
+            try:
+                return self._predict_single_epoch_shift(epoch_shift, concat_uris, overwrite_existing)
+            except Exception as exc:  # noqa: BLE001 - we intentionally catch broadly to detect throttling
+                if self._is_throttling_error(exc) and attempt < max(1, int(retry_attempts)):
+                    logger.warning(
+                        "Throttled on epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
+                        epoch_shift,
+                        attempt,
+                        retry_attempts,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                    # Exponential backoff for next attempt
+                    try:
+                        delay = int(delay * float(retry_backoff)) if retry_backoff else delay
+                    except Exception:
+                        # If backoff isn't a valid float, keep the same delay
+                        pass
+                    attempt += 1
+                    last_exc = exc
+                    continue
+                # Non-throttling error or final attempt exhausted
+                last_exc = exc
+                break
+        # If we reach here, all attempts failed
+        if last_exc is not None:
+            raise last_exc
+        # Should never get here, but return {} to satisfy type checker
+        return {}
 
 
     def _build_evaluator_for_shift(self, epoch_shift: int):
