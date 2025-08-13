@@ -10,7 +10,7 @@ import numpy as np
 # ensure script_modeling directory is on path for its module
 script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
 sys.path.insert(0, str(script_modeling_dir))
-from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels, select_shifted_offsets
+from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels, select_shifted_offsets, identify_offset_ints
 
 # Import from data-science repo
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
@@ -222,11 +222,21 @@ def _process_concatenated_split(
     X_epoch, y_epoch = select_shifted_offsets(
         X_full, y_df, wallets_config, epoch_shift, split
     )
-    # Build a mask on the full frame for rows that survived epoch selection
-    allowed_offsets = set(X_epoch.iloc[:, 0].unique())
-    epoch_mask_full = X_full.iloc[:, 0].isin(allowed_offsets).to_numpy()
-    # Apply same epoch mask to predictions
+
+    # Build epoch mask directly from configured target_offset_days after shift
+    # (do NOT derive from X_epoch, which no longer contains the offset column).
+    target_offset_days = identify_offset_ints(wallets_config, shift=epoch_shift)[f'{split}_offsets']
+    epoch_mask_full = X_full.iloc[:, 0].isin(target_offset_days).to_numpy()
+
+    # Apply the epoch mask to predictions
     y_pred_epoch = y_pred[epoch_mask_full].reset_index(drop=True)
+
+    # Sanity: the mask rows should match rows kept by select_shifted_offsets
+    if int(epoch_mask_full.sum()) != len(X_epoch):
+        logger.warning(
+            "%s: epoch mask mismatch (mask rows=%s vs X_epoch=%s); using config-derived mask.",
+            split, int(epoch_mask_full.sum()), len(X_epoch)
+        )
 
     # 2) Custom feature filtering
     try:

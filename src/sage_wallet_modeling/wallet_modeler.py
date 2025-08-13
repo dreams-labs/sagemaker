@@ -636,7 +636,10 @@ class WalletModeler:
             job_name=job_name,
             wait=True,
             logs=False,
-            compression_type='Gzip'
+            compression_type='Gzip',
+            # Exclude the offset_days column (ID/filter col) from scoring input
+            # For CSV, rows are treated as JSON arrays; $[1:] selects cols 1..end
+            input_filter='$[1:]'
         )
 
         # Store predictions URI
