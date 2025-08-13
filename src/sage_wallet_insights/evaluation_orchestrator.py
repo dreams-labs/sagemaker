@@ -54,28 +54,21 @@ class EvaluationOrchestrator:
         # Cache for loaded metadata and models
         self._metadata_cache = {}
 
+        self._complete_importance_df = None
+
 
     # ------------------------
     #    Feature Importance Analysis
     # ------------------------
 
     @u.timing_decorator
-    def analyze_all_feature_importances(
-        self,
-        feature_categories_filter: list = None,
-        feature_names_filter: list = None,
-        groups: list = None
-    ) -> pd.DataFrame:
+    def generate_all_feature_importances(self) -> pd.DataFrame:
         """
         Extract and analyze feature importances across all epoch shift models.
-
-        Params:
-        - feature_categories_filter (list): Categories to include (e.g., ['macro', 'timing'])
-        - feature_names_filter (list): Specific feature names to include
-        - groups (list): Groupby columns for aggregation
+        Generate the complete dataset once for multiple filtering operations.
 
         Returns:
-        - DataFrame: Aggregated importance statistics across all models
+        - DataFrame: Complete importance data for all models and features
         """
         epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
         n_threads = self.wallets_config['n_threads'].get('analyze_all_importances', 4)
@@ -83,13 +76,7 @@ class EvaluationOrchestrator:
         if not epoch_shifts:
             raise ConfigError("No epoch_shifts configured in wallets_config")
 
-        # Default grouping and filters
-        if groups is None:
-            groups = ['feature_category']
-        if feature_categories_filter is None:
-            feature_categories_filter = []  # Include all by default
-
-        logger.milestone(f"Analyzing feature importances for {len(epoch_shifts)} epoch shifts...")
+        logger.milestone(f"Generating feature importances for {len(epoch_shifts)} epoch shifts...")
 
         # Extract importances for all models in parallel
         importance_results = {}
@@ -118,17 +105,128 @@ class EvaluationOrchestrator:
 
         logger.info(f"Successfully analyzed {len(successful_results)}/{len(epoch_shifts)} models")
 
-        # Combine and aggregate results
-        combined_df = self._aggregate_importance_distributions(
-            successful_results,
-            feature_categories_filter,
-            feature_names_filter,
-            groups
+        # Build complete dataset with all features and models
+        all_feature_data = []
+
+        for shift, result in successful_results.items():
+            feature_importances_df = result['analyzed_importances']
+            total_importance = result['total_importance']
+
+            # Add model-level info to each feature row
+            feature_df = feature_importances_df.copy()
+            feature_df['epoch_shift'] = shift
+            feature_df['total_model_importance'] = total_importance
+            feature_df['sum_pct'] = feature_df['importance'] / total_importance
+
+            all_feature_data.append(feature_df)
+
+        # Combine all models into single DataFrame
+        self._complete_importance_df = pd.concat(all_feature_data, ignore_index=True)
+
+        logger.info(f"Generated complete importance dataset: "
+                    f"{len(self._complete_importance_df)} feature-model combinations")
+
+        return self._complete_importance_df
+
+
+    def filter_and_aggregate_importances(
+        self,
+        feature_categories_filter: list = None,
+        feature_names_filter: list = None,
+        groups: list = None,
+        complete_df: pd.DataFrame = None
+    ) -> pd.DataFrame:
+        """
+        Filter and aggregate the complete importance dataset.
+        Aggregates to model-level totals first, then calculates distribution statistics.
+
+        Params:
+        - feature_categories_filter (list): Categories to include
+        - feature_names_filter (list): Specific feature names to include
+        - groups (list): Groupby columns for aggregation
+        - complete_df (DataFrame): Pre-generated complete dataset, or None to use cached
+
+        Returns:
+        - DataFrame: Filtered and aggregated importance statistics across models
+        """
+        # Use provided df or cached version
+        if complete_df is None:
+            if not hasattr(self, '_complete_importance_df'):
+                raise ValueError("No complete importance data available. "
+                                 "Call generate_all_feature_importances() first.")
+            complete_df = self._complete_importance_df
+
+        # Default grouping
+        if groups is None:
+            groups = ['feature_category']
+
+        # Apply filters
+        filtered_df = complete_df.copy()
+
+        if feature_categories_filter:
+            filtered_df = filtered_df[filtered_df['feature_category'].isin(feature_categories_filter)]
+
+        if feature_names_filter:
+            filtered_df = filtered_df[filtered_df['feature_name'].isin(feature_names_filter)]
+
+        # KEY CHANGE: First aggregate by model and group combination
+        # This sums all features within each category for each model
+        model_group_totals = (filtered_df
+                            .groupby(['epoch_shift'] + groups)
+                            .agg({
+                                'importance': 'sum',
+                                'total_model_importance': 'first'  # Same for all rows in a model
+                            })
+                            .reset_index())
+
+        # Calculate percentage for each model-group combination
+        model_group_totals['sum_pct'] = (model_group_totals['importance'] /
+                                        model_group_totals['total_model_importance'])
+
+        # Now calculate distribution statistics across models
+        distribution_stats = (model_group_totals
+                            .groupby(groups)['sum_pct']
+                            .agg(['count', 'mean', 'median', 'min', 'max', 'std'])
+                            .round(4))
+
+        # Add total importance stats (across all models)
+        total_importance_stats = (model_group_totals
+                                .groupby(groups)['importance']
+                                .agg(['sum', 'mean'])
+                                .round(2))
+
+        # Combine stats with better column ordering
+        final_stats = pd.concat([distribution_stats, total_importance_stats], axis=1)
+        final_stats.columns = [
+            'model_count', 'pct_mean', 'pct_median', 'pct_min', 'pct_max', 'pct_std',
+            'total_importance_sum', 'importance_mean'
+        ]
+
+        # Sort by mean percentage importance
+        final_stats = final_stats.sort_values('pct_mean', ascending=False)
+
+        logger.info(f"Filtered importance analysis: {len(final_stats)} feature "
+                    f"groups across {model_group_totals['epoch_shift'].nunique()} models")
+
+        return final_stats
+
+
+    # Keep the old method for backward compatibility, but deprecate it
+    @u.timing_decorator
+    def analyze_all_feature_importances(
+        self,
+        feature_categories_filter: list = None,
+        feature_names_filter: list = None,
+        groups: list = None
+    ) -> pd.DataFrame:
+        """
+        DEPRECATED: Use generate_all_feature_importances() + filter_and_aggregate_importances() instead.
+        """
+        logger.warning("analyze_all_feature_importances() is deprecated. Use generate + filter pattern for better performance.")
+        complete_df = self.generate_all_feature_importances()
+        return self.filter_and_aggregate_importances(
+            feature_categories_filter, feature_names_filter, groups, complete_df
         )
-
-        return combined_df
-
-
     def extract_single_model_importances(self, model_uri: str) -> pd.DataFrame:
         """
         Extract feature importances from a single model URI.
