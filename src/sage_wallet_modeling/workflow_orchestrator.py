@@ -5,6 +5,8 @@ model training coordination, and results handling.
 import logging
 import copy
 import traceback
+import tempfile
+import tarfile
 import time
 from typing import List
 from pathlib import Path
@@ -13,6 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 import boto3
+import xgboost as xgb
 from botocore.exceptions import ClientError
 
 # Local modules
@@ -729,21 +732,6 @@ class WalletWorkflowOrchestrator:
         return prediction_results
 
 
-    def _is_throttling_error(self, exc: Exception) -> bool:
-        """Return True if the exception appears to be an AWS throttling error."""
-        # Botocore ClientError:
-        if isinstance(exc, ClientError):
-            code = exc.response.get('Error', {}).get('Code', '')
-            message = exc.response.get('Error', {}).get('Message', '')
-            if code in {"ThrottlingException", "Throttling", "TooManyRequestsException", "RequestLimitExceeded"}:
-                return True
-            if isinstance(message, str) and ("Rate exceeded" in message or "Throttling" in message):
-                return True
-        # Fallback string check for other exceptions (e.g., SDK wrappers)
-        text = str(exc)
-        return ("Rate exceeded" in text) or ("Throttling" in text)
-
-
     @u.timing_decorator
     def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
         """
@@ -782,6 +770,10 @@ class WalletWorkflowOrchestrator:
                     raise e
 
         return dict(sorted(evaluators_by_shift.items()))
+
+
+
+
 
 
 
@@ -1081,7 +1073,7 @@ class WalletWorkflowOrchestrator:
             try:
                 return self._train_single_epoch_shift(epoch_shift, concat_uris)
             except Exception as exc:  # noqa: BLE001
-                if self._is_throttling_error(exc) and attempt < max_attempts:
+                if _is_throttling_error(exc) and attempt < max_attempts:
                     logger.warning(
                         "Throttled on training epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
                         epoch_shift,
@@ -1219,7 +1211,7 @@ class WalletWorkflowOrchestrator:
             try:
                 return self._predict_single_epoch_shift(epoch_shift, concat_uris, overwrite_existing)
             except Exception as exc:  # noqa: BLE001 - we intentionally catch broadly to detect throttling
-                if self._is_throttling_error(exc) and attempt < max(1, int(retry_attempts)):
+                if _is_throttling_error(exc) and attempt < max(1, int(retry_attempts)):
                     logger.warning(
                         "Throttled on epoch_shift=%s (attempt %s/%s). Sleeping %ss then retrying... Error: %s",
                         epoch_shift,
@@ -1369,3 +1361,18 @@ def convert_offset_ints_to_dates(offset_days: list[int], wallets_config: dict) -
         date_strings.append(date_string)
 
     return date_strings
+
+
+def _is_throttling_error(exc: Exception) -> bool:
+    """Return True if the exception appears to be an AWS throttling error."""
+    # Botocore ClientError:
+    if isinstance(exc, ClientError):
+        code = exc.response.get('Error', {}).get('Code', '')
+        message = exc.response.get('Error', {}).get('Message', '')
+        if code in {"ThrottlingException", "Throttling", "TooManyRequestsException", "RequestLimitExceeded"}:
+            return True
+        if isinstance(message, str) and ("Rate exceeded" in message or "Throttling" in message):
+            return True
+    # Fallback string check for other exceptions (e.g., SDK wrappers)
+    text = str(exc)
+    return ("Rate exceeded" in text) or ("Throttling" in text)
