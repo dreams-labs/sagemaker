@@ -156,24 +156,28 @@ def load_csv_as_dmatrix(csv_path: Path) -> xgb.DMatrix:
     return xgb.DMatrix(features, label=labels)
 
 
+
 def build_booster_params(args: argparse.Namespace, modeling_config: dict) -> dict:
     """Construct XGBoost params by automatically unpacking all provided hyperparameters."""
     # Base parameters that are always included
     params = {"seed": 42}
     if modeling_config["training"]["model_type"] == "regression":
         params.update({
-            "objective": "reg:squarederror",            # or reg:squaredlogerror
-            "eval_metric": modeling_config["training"].get("eval_metric", "rmse"),
+            "objective": "reg:squarederror",
         })
+        # only set built-in eval_metric; skip custom 'top_quantile'
+        if modeling_config["training"].get("eval_metric", "rmse") != "top_quantile":
+            params["eval_metric"] = modeling_config["training"].get("eval_metric", "rmse")
     else:
         params.update({
             "objective": "binary:logistic",
-            "eval_metric": modeling_config["training"].get("eval_metric", "aucpr"),
         })
+        # only set built-in eval_metric; skip custom 'top_quantile'
+        if modeling_config["training"].get("eval_metric", "aucpr") != "top_quantile":
+            params["eval_metric"] = modeling_config["training"].get("eval_metric", "aucpr")
 
     # Convert args to dict and add all non-None hyperparameters
     args_dict = vars(args)
-
     for param_name, value in args_dict.items():
         if value is not None:
             params[param_name] = value
