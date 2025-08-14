@@ -299,7 +299,8 @@ class WalletModeler:
             dataset_type: str = 'val',
             download_preds: bool = True,
             job_name_suffix: str = None,
-            override_existing: bool = False
+            override_existing: bool = False,
+            input_filter: str = None
         ):
         """
         Score specified dataset using trained model via SageMaker batch transform.
@@ -309,6 +310,10 @@ class WalletModeler:
         - download_preds (bool): Whether to download the predictions to the local
             s3_downloads directory
         - job_name_suffix (str): Optional suffix to append to job name for uniqueness
+        - override_existing (bool): Whether to overwrite existing local predictions
+        - input_filter (str): JSONPath filter for data preprocessing, e.g.
+            '$[?(@[0] in [60,90,120])][1:]' for epoch shift filtering.
+            If None, uses default column-only filtering
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -340,7 +345,8 @@ class WalletModeler:
             dataset_uri,
             model_name,
             override_existing=override_existing,
-            job_name_suffix=job_name_suffix
+            job_name_suffix=job_name_suffix,
+            input_filter=input_filter
         )
 
         # Download if configured
@@ -349,11 +355,21 @@ class WalletModeler:
 
         return result
 
-
     @u.timing_decorator
-    def batch_predict_test_and_val(self, overwrite_existing: bool = False) -> dict[str, dict]:
+    def batch_predict_test_and_val(
+            self,
+            overwrite_existing: bool = False,
+            offset_filters: dict = None
+        ) -> dict[str, dict]:
         """
         Run batch transform predictions for 'test' and 'val' in parallel.
+
+        Params:
+        - overwrite_existing (bool): Whether to overwrite existing local predictions
+        - offset_filters (dict): JSONPath filters for epoch shift filtering, format:
+            {'test': '$[?(@[0] in [60,90,120])][1:]', 'val': '$[?(@[0] in [90,120,150])][1:]'}
+            If None, uses default column-only filtering
+
         Returns:
         - dict: Mapping split name ('test' or 'val') to the batch transform result dict.
         """
@@ -367,7 +383,8 @@ class WalletModeler:
                     dataset_type=split,
                     download_preds=True,
                     job_name_suffix=f"concat-{split}",
-                    override_existing=overwrite_existing
+                    override_existing=overwrite_existing,
+                    input_filter=offset_filters.get(split) if offset_filters else None
                 ): split
                 for split in splits
             }
@@ -572,7 +589,8 @@ class WalletModeler:
             dataset_uri: str,
             model_name: str,
             override_existing: bool = False,
-            job_name_suffix: str = None
+            job_name_suffix: str = None,
+            input_filter: str = None
         ):
         """
         Execute batch transform job for specified dataset URI.
@@ -582,6 +600,9 @@ class WalletModeler:
         - model_name (str): Name of registered SageMaker model
         - override_existing (bool): Whether to overwrite existing output files
         - job_name_suffix (str): Optional suffix to append to job name for uniqueness
+        - input_filter (str): JSONPath filter for data preprocessing. If None, defaults to
+            '$[1:]' for column-only filtering. For epoch shifts, uses format like
+            '$[?(@[0] in [60,90,120])][1:]' to filter rows and columns
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -615,6 +636,9 @@ class WalletModeler:
             else:
                 logger.warning(f"Output exists at: {predictions_uri}. Overwriting...")
 
+        # Determine input filter - use provided filter or default to column-only
+        effective_filter = input_filter if input_filter is not None else '$[1:]'
+
         transformer = Transformer(
             model_name=model_name,
             instance_count=self.modeling_config['metaparams']['instance_count'],
@@ -628,6 +652,7 @@ class WalletModeler:
         logger.debug(f"Using model: {model_name}")
         logger.debug(f"Input data: {dataset_uri}")
         logger.debug(f"Output path: {output_path}")
+        logger.debug(f"Input filter: {effective_filter}")
 
         transformer.transform(
             data=dataset_uri,
@@ -637,9 +662,7 @@ class WalletModeler:
             wait=True,
             logs=False,
             compression_type='Gzip',
-            # Exclude the offset_days column (ID/filter col) from scoring input
-            # For CSV, rows are treated as JSON arrays; $[1:] selects cols 1..end
-            input_filter='$[1:]'
+            input_filter=effective_filter
         )
 
         # Store predictions URI

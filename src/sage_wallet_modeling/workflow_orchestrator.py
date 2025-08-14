@@ -1181,8 +1181,11 @@ class WalletWorkflowOrchestrator:
             logger.error(f"No model found for epoch_shift={epoch_shift}")
             raise e
 
-        # Run batch predictions for test and val (this runs them in parallel internally)
-        pred_results = modeler.batch_predict_test_and_val(overwrite_existing=overwrite_existing)
+        # Run batch predictions for test and val with epoch filtering
+        pred_results = modeler.batch_predict_test_and_val(
+            overwrite_existing=overwrite_existing,
+            offset_filters=None
+        )
 
         # Compile results
         return {
