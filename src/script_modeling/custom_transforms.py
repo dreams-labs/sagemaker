@@ -438,7 +438,7 @@ def build_custom_dmatrix(
     )
 
     # Step 2: Apply pattern-based column selection AFTER filtering
-    df_x_final, selected_columns = apply_column_filters(
+    df_x_final, _ = apply_column_filters(
         df_x_rows_filtered, feature_columns, config
     )
 
@@ -447,9 +447,6 @@ def build_custom_dmatrix(
 
     # Step 4: Apply y transformation
     labels = preprocess_custom_labels(df_y_final, config)
-
-    # Store selected column names in metadata for prediction use
-    metadata['selected_feature_names'] = selected_columns
 
     print(f"Final DMatrix: {df_x_final.shape[0]} rows × {df_x_final.shape[1]} features")
 
