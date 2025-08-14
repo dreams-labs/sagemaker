@@ -1,5 +1,7 @@
 import copy
 import argparse
+import fnmatch
+from typing import List, Set
 import pandas as pd
 import numpy as np
 import xgboost as xgb
@@ -283,6 +285,86 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
 # Column Filters
 # --------------
 
+def identify_matching_columns(
+    column_patterns: List[str],
+    all_columns: List[str],
+    protected_columns: List[str] = None
+) -> Set[str]:
+    """
+    Match columns that contain all non-wildcard parts of patterns, preserving sequence and structure.
+
+    Params:
+    - column_patterns: List of patterns with * wildcards.
+    - all_columns: List of actual column names.
+    - protected_columns: List of columns to exclude from results.
+
+    Returns:
+    - matched_columns: Set of columns matching any pattern, minus protected columns.
+    """
+    matched = set()
+    for pattern in column_patterns:
+        for column in all_columns:
+            # Match using fnmatch to preserve structure and sequence
+            if fnmatch.fnmatch(column, pattern):
+                matched.add(column)
+
+    if protected_columns:
+        matched = matched - set(protected_columns)
+
+    return matched
+
+
+def apply_pattern_based_feature_selection(
+    df_x: pd.DataFrame,
+    feature_columns: List[str],
+    modeling_config: dict
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """
+    Apply pattern-based column dropping to feature DataFrame.
+
+    Params:
+    - df_x (DataFrame): Raw feature data without headers
+    - feature_columns (List[str]): List of feature column names (excluding offset_date)
+    - modeling_config (dict): modeling_config with feature_selection patterns
+
+    Returns:
+    - tuple: (filtered_df, column_mask) where column_mask indicates kept columns
+    """
+    # Get pattern definitions
+    drop_patterns = modeling_config['training'].get('drop_patterns', [])
+    protected_columns = modeling_config['training'].get('protected_columns', [])
+
+    if not drop_patterns:
+        print("No drop patterns configured, returning unfiltered data")
+        return df_x, np.ones(df_x.shape[1], dtype=bool)
+
+    # Validate feature list length matches X df
+    if len(feature_columns) != df_x.shape[1]:
+        raise ValueError(f"Feature column count mismatch: feature_columns has {len(feature_columns)} "
+                        f"columns, DataFrame has {df_x.shape[1]} columns")
+
+    # Assign column names
+    df_x_named = df_x.copy()
+    df_x_named.columns = feature_columns
+
+    # Identify columns to drop
+    columns_to_drop = identify_matching_columns(
+        drop_patterns,
+        feature_columns,
+        protected_columns
+    )
+
+    print(f"Pattern selection: {len(feature_columns) - len(columns_to_drop)}"
+          f"/{len(feature_columns)} columns kept")
+
+    # Create column mask (True = keep column)
+    column_mask = ~df_x_named.columns.isin(columns_to_drop)
+    filtered_df = df_x_named.loc[:, column_mask]
+
+    if filtered_df.shape[1] == 0:
+        raise ValueError("All columns removed by pattern-based feature selection")
+
+    return filtered_df, column_mask
 
 
 
@@ -291,11 +373,11 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
 # ------------------------------------------------------------------------ #
 
 def build_custom_dmatrix(
-        df_x: pd.DataFrame,
-        df_y: pd.Series,
-        config: dict,
-        metadata: dict
-    ) -> xgb.DMatrix:
+    df_x: pd.DataFrame,
+    df_y: pd.Series,
+    config: dict,
+    metadata: dict
+) -> xgb.DMatrix:
     """
     Build XGBoost DMatrix from raw features and labels, applying custom transformations.
 
@@ -316,16 +398,33 @@ def build_custom_dmatrix(
     if df_x.isnull().values.any():
         raise ValueError("NaNs detected in feature DataFrame")
 
-    # Apply custom X filtering if enabled
-    df_x_final, row_mask = apply_custom_feature_filters(df_x, metadata, config)
+    # Get all feature columns
+    feature_columns = metadata['feature_columns']
+
+    # Step 1: Apply pattern-based column selection
+    df_x_cols_filtered, column_mask = apply_pattern_based_feature_selection(
+        df_x, feature_columns, config
+    )
+
+    # Step 2: Apply custom row-level filtering
+    df_x_final, row_mask = apply_custom_feature_filters(
+        df_x_cols_filtered, metadata, config
+    )
+
+    # Step 3: Apply row mask to y data
     df_y_final = df_y[row_mask].reset_index(drop=True)
 
-    # Apply y transformation
+    # Step 4: Apply y transformation
     labels = preprocess_custom_labels(df_y_final, config)
 
-    # Ensure labels array is not empty
-    if labels.shape[0] == 0:
-        raise ValueError("Processed label array is empty")
+    # Store column mask in metadata for prediction use
+    metadata['sagemaker_column_mask'] = column_mask.tolist()
+
+    # Store selected feature names for debugging
+    selected_features = df_x_final.columns.tolist()
+    metadata['selected_feature_names'] = selected_features
+
+    print(f"Final DMatrix: {df_x_final.shape[0]} rows × {df_x_final.shape[1]} features")
 
     # Ensure features and labels have matching lengths
     if df_x_final.shape[0] != labels.shape[0]:
