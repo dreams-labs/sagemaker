@@ -24,20 +24,20 @@ script_mode:
 # KeyParam Target Var
 target:
     classification:
-        threshold: 0.40  # if target > {threshold}, class = 1
+        threshold: 0.30  # if target > {threshold}, class = 1
     # target_var: crypto_net_gain/crypto_inflows/base
-    # target_var: cw_crypto_net_gain/crypto_inflows/base
-    target_var: cw_crypto_net_gain/crypto_inflows/winsorized
+    target_var: cw_crypto_net_gain/crypto_inflows/base
+    # target_var: cw_crypto_net_gain/crypto_inflows/winsorized
     # target_var: crypto_net_gain/crypto_inflows/base
 
 predicting:
     y_pred_threshold: 0.5 # predictions above this are positive
 
 training:
-    model_type: regression
-    eval_metric: rmse
-    # model_type: classification  # regression or classification
-    # eval_metric: aucpr
+    # model_type: regression
+    # eval_metric: rmse
+    model_type: classification  # regression or classification
+    eval_metric: aucpr
     # eval_metric: top_quantile
     custom_val:
         metric: cw_coin_return # top_percentile of top_scores
@@ -46,21 +46,25 @@ training:
     custom_filters:
         cw_balance|total_usd_balance|w1:
             cli: cw_balance
-            min: 100
+            min: 1000
         # trading|total_volume|w1:
         #     cli: total_volume
         #     min: 500
         #     max: 10000000
-        macro|btc_mvrv_z_score_last|w1:
-            cli: btc_z_score
-            min: 1.5
+        # macro|btc_vdd_multiple_last|w1:
+        #     cli: btc_vdd
+        #     min: 0.5
+        # macro|btc_mvrv_z_score_last|w1:
+        #     cli: btc_z_score
+        #     min: 1.5
             # max: 10
         cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
             cli: cw_mkt_cap
-            min: 25000000
+            min: 5000000
             # max: 150000000
         # trading|crypto_inflows|all_windows:
-        # trading|unique_coins_traded|all_windows:
+        trading|unique_coins_traded|all_windows:
+            min: 5
         # balance|total_usd_balance|w1:
 
 
