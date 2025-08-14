@@ -153,7 +153,7 @@ class EvaluationOrchestrator:
         if complete_df is None:
             if not hasattr(self, '_complete_importance_df'):
                 raise ValueError("No complete importance data available. "
-                                 "Call generate_all_feature_importances() first.")
+                                "Call generate_all_feature_importances() first.")
             complete_df = self._complete_importance_df
 
         # Default grouping
@@ -168,6 +168,17 @@ class EvaluationOrchestrator:
 
         if feature_names_filter:
             filtered_df = filtered_df[filtered_df['feature_name'].isin(feature_names_filter)]
+
+        # Calculate column count for each group
+        # Count unique features per group (accounting for multiple offsets per feature)
+        num_offsets = filtered_df['epoch_shift'].nunique()
+        column_counts = (filtered_df
+                        .groupby(groups)
+                        .size()
+                        .div(num_offsets)
+                        .round().astype(int)
+                        .to_frame('column_count')
+                        .reset_index())
 
         # KEY CHANGE: First aggregate by model and group combination
         # This sums all features within each category for each model
@@ -202,6 +213,15 @@ class EvaluationOrchestrator:
             'total_importance_sum', 'importance_mean'
         ]
 
+        # Merge column counts into final stats
+        final_stats = final_stats.merge(column_counts.set_index(groups),
+                                    left_index=True, right_index=True)
+
+        # Reorder columns with column_count first
+        column_order = ['column_count', 'pct_mean', 'pct_median',
+                    'pct_min', 'pct_max', 'pct_std', 'total_importance_sum', 'importance_mean']
+        final_stats = final_stats[column_order]
+
         # Sort by mean percentage importance
         final_stats = final_stats.sort_values('pct_mean', ascending=False)
 
@@ -211,33 +231,6 @@ class EvaluationOrchestrator:
         return final_stats
 
 
-    # Keep the old method for backward compatibility, but deprecate it
-    @u.timing_decorator
-    def analyze_all_feature_importances(
-        self,
-        feature_categories_filter: list = None,
-        feature_names_filter: list = None,
-        groups: list = None
-    ) -> pd.DataFrame:
-        """
-        DEPRECATED: Use generate_all_feature_importances() + filter_and_aggregate_importances() instead.
-        """
-        logger.warning("analyze_all_feature_importances() is deprecated. Use generate + filter pattern for better performance.")
-        complete_df = self.generate_all_feature_importances()
-        return self.filter_and_aggregate_importances(
-            feature_categories_filter, feature_names_filter, groups, complete_df
-        )
-    def extract_single_model_importances(self, model_uri: str) -> pd.DataFrame:
-        """
-        Extract feature importances from a single model URI.
-
-        Params:
-        - model_uri (str): S3 URI of the trained model
-
-        Returns:
-        - DataFrame: Feature importances with proper column names
-        """
-        return self._extract_feature_importances(model_uri)
 
 
     # ------------------------
@@ -379,19 +372,21 @@ class EvaluationOrchestrator:
             feature_names = metadata['feature_columns'][1:]  # Skip offset_date column
 
             # Build importance DataFrame with proper feature names
+            # Include ALL features, with 0 importance for unused ones
             importance_data = []
             for i, feat_name in enumerate(feature_names):
                 xgb_feat_key = f'f{i}'  # XGBoost uses f0, f1, f2...
-                if xgb_feat_key in importance_dict:
-                    importance_data.append({
-                        'feature': feat_name,
-                        'importance': importance_dict[xgb_feat_key],
-                        'feature_index': i
-                    })
+                importance_value = importance_dict.get(xgb_feat_key, 0.0)  # Default to 0 if not found
+                importance_data.append({
+                    'feature': feat_name,
+                    'importance': importance_value,
+                    'feature_index': i
+                })
 
             importances_df = pd.DataFrame(importance_data).sort_values('importance', ascending=False)
 
-            logger.info(f"Extracted {len(importances_df)} feature importances for model")
+            logger.info(f"Extracted {len(importances_df)} feature importances for model "
+                    f"({len([x for x in importance_data if x['importance'] > 0])} non-zero)")
             return importances_df
 
 
