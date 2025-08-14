@@ -125,7 +125,10 @@ def main() -> None:
     booster_params = h.build_booster_params(args, modeling_config)
 
     # Apply CLI filter overrides to config
-    modeling_config = ct.apply_cli_filter_overrides(modeling_config, args)
+    modeling_config = ct.apply_cli_row_filter_overrides(modeling_config, args)
+
+    # Apply CLI pattern overrides to config
+    modeling_config = ct.apply_cli_col_filter_overrides(modeling_config, args)
 
     # Load training and validation matrices
     training_matrix, validation_matrix = load_data_matrices(
