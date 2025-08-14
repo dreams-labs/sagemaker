@@ -5,8 +5,6 @@ model training coordination, and results handling.
 import logging
 import copy
 import traceback
-import tempfile
-import tarfile
 import time
 from typing import List
 from pathlib import Path
@@ -15,7 +13,6 @@ import json
 import numpy as np
 import pandas as pd
 import boto3
-import xgboost as xgb
 from botocore.exceptions import ClientError
 
 # Local modules
@@ -750,11 +747,39 @@ class WalletWorkflowOrchestrator:
             f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
         )
 
+        # Preload shared y (identical across shifts)
+        target_var = self.modeling_config['target']['target_var']
+        y_test_shared = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
+        y_val_shared  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
+        y_test_shared.columns = [target_var]
+        y_val_shared.columns = [target_var]
+
+        # Preload per-shift predictions (loaded once here, not inside each worker)
+        preds_by_shift: dict[int, dict[str, pd.Series]] = {}
+        for shift in epoch_shifts:
+            date_suffix = f"sh{shift}"
+            preds_by_shift[shift] = {
+                'y_test_pred': sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix),
+                'y_val_pred':  sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix),
+            }
+
+        # Preload concatenated train features once (used by all shifts)
+        y_train_concat, X_train_concat, _ = sime._load_concatenated_features(self.wallets_config)
+
         evaluators_by_shift: dict[int, object] = {}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
             future_to_shift = {
-                executor.submit(self._build_evaluator_for_shift, shift): shift
+                executor.submit(
+                    self._build_evaluator_for_shift,
+                    shift,
+                    y_test_shared,
+                    y_val_shared,
+                    preds_by_shift[shift]['y_test_pred'],
+                    preds_by_shift[shift]['y_val_pred'],
+                    X_train_concat,
+                    y_train_concat,
+                ): shift
                 for shift in epoch_shifts
             }
 
@@ -1240,7 +1265,7 @@ class WalletWorkflowOrchestrator:
         return {}
 
 
-    def _build_evaluator_for_shift(self, epoch_shift: int):
+    def _build_evaluator_for_shift(self, epoch_shift: int, y_test: pd.DataFrame, y_val: pd.DataFrame, y_test_pred: pd.Series, y_val_pred: pd.Series, X_train_preloaded: pd.DataFrame, y_train_preloaded: pd.Series):
         """
         Build a single evaluator for the provided epoch shift.
 
@@ -1250,6 +1275,7 @@ class WalletWorkflowOrchestrator:
         - Load concatenated y for test/val and align target column name
         - Construct and return the evaluator object
         """
+        logger.warning("1")
         date_suffix = f"sh{epoch_shift}"
 
         # Initialize a modeler to get model info and (if needed) run predictions
@@ -1264,15 +1290,7 @@ class WalletWorkflowOrchestrator:
         # Load model info (raises if not found)
         model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
 
-        # Load concatenated y for and y_pred
-        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
-        y_val  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
-        y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
-        y_val_pred  = sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix)
-
-        target_var = self.modeling_config['target']['target_var']
-        y_test.columns = [target_var]
-        y_val.columns = [target_var]
+        logger.warning("3")
 
         # Build the evaluator using the shared helper in sage_wallet_insights
         evaluator = sime.create_concatenated_sagemaker_evaluator(
@@ -1283,7 +1301,9 @@ class WalletWorkflowOrchestrator:
             y_test,
             y_val_pred,
             y_val,
-            epoch_shift
+            epoch_shift,
+            X_train_preloaded=X_train_preloaded,
+            y_train_preloaded=y_train_preloaded,
         )
 
         return evaluator

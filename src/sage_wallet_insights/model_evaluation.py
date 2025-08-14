@@ -1,6 +1,6 @@
 import sys
 import logging
-from typing import Tuple, Union, Dict
+from typing import Tuple, Union, Dict, Optional
 from pathlib import Path
 import json
 import pandas as pd
@@ -42,7 +42,9 @@ def create_concatenated_sagemaker_evaluator(
     y_test: pd.DataFrame,
     y_val_pred: pd.Series = None,
     y_val: pd.DataFrame = None,
-    epoch_shift: int = 0
+    epoch_shift: int = 0,
+    X_train_preloaded: Optional[pd.DataFrame] = None,
+    y_train_preloaded: Optional[pd.Series] = None,
 ) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
     """
     Create a SageMaker evaluator for concatenated model results with optional validation set.
@@ -62,6 +64,7 @@ def create_concatenated_sagemaker_evaluator(
       (May return None if all rows are filtered out for the given epoch.)
     """
     # Apply custom transforms and get filtered data
+    logger.warning("4")
     try:
         (y_test_final, X_test_final, y_test_pred_final, y_val_final, X_val_final, y_val_pred_final,
          row_mask_val, epoch_mask_val) = \
@@ -71,9 +74,12 @@ def create_concatenated_sagemaker_evaluator(
     except SkipEpochEvaluation:
         logger.warning("Skipping evaluation for epoch_shift=%s (all rows filtered out).", epoch_shift)
         return None
-
-    # For custom transforms, we still need to load train data normally
-    y_train, X_train, _ = _load_concatenated_features(wallets_config)
+    logger.warning("5")
+    # For custom transforms, prefer preloaded train data; fallback to local load
+    if X_train_preloaded is None or y_train_preloaded is None:
+        y_train, X_train, _ = _load_concatenated_features(wallets_config)
+    else:
+        y_train, X_train = y_train_preloaded, X_train_preloaded
     y_test_series = y_test_final
     y_test_pred = y_test_pred_final
 
@@ -81,7 +87,7 @@ def create_concatenated_sagemaker_evaluator(
     validation_provided = y_val_final is not None
     y_val_series = y_val_final if validation_provided else None
     y_val_pred = y_val_pred_final if validation_provided else None
-
+    logger.warning("6")
     # Continuous target variable (used for returns plots)
     if 'target' not in modeling_config or 'target_var' not in modeling_config['target']:
         raise ConfigError("Missing 'target.target_var' in modeling_config; required for returns plotting.")
