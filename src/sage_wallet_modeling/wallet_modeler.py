@@ -14,6 +14,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tarfile
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 import boto3
@@ -582,6 +583,58 @@ class WalletModeler:
 
         # Register model in SageMaker
         scoring_model.create()
+
+
+    def _load_model_config(self) -> dict:
+        """
+        Reconstruct the modeling config path from self.model_uri and load it.
+
+        Example transformation:         # pylint:disable=line-too-long
+        model_uri: s3://wallet-script-models/model-outputs/dda-956-importance-dev/sh0/wscr-dda-956--sh0-0814-150127/output/model.tar.gz
+        config_uri: s3://wallet-script-models/dda-956-importance-dev/config/wscr-dda-956--sh0-0814-150127/modeling_config.json
+
+        Returns:
+        - dict: The modeling configuration used to train this specific model
+        """
+        if not self.model_uri:
+            raise ValueError("No model URI available. Call train_model() or load_existing_model() first.")
+
+        if not self.model_uri.startswith('s3://'):
+            raise ValueError(f"Invalid S3 URI format: {self.model_uri}")
+
+        # Parse the model URI structure
+        # Expected: s3://bucket/model-outputs/upload_dir/date_suffix/job_name/output/model.tar.gz
+        uri_parts = self.model_uri.replace('s3://', '').split('/')
+
+        if len(uri_parts) < 6 or uri_parts[1] != 'model-outputs':
+            raise ValueError(f"Unexpected model URI structure: {self.model_uri}")
+
+        # pylint:disable=unused-variable
+        bucket = uri_parts[0]
+        upload_dir = uri_parts[2]  # e.g., 'dda-956-importance-dev'
+        date_suffix = uri_parts[3]  # e.g., 'sh0'
+        job_name = uri_parts[4]     # e.g., 'wscr-dda-956--sh0-0814-150127'
+
+        # Construct config URI
+        config_uri = f"s3://{bucket}/{upload_dir}/config/{job_name}/modeling_config.json"
+
+        # Download and parse the config
+        s3_client = self.sagemaker_session.boto_session.client('s3')
+        config_bucket, config_key = config_uri.replace('s3://', '').split('/', 1)
+
+        try:
+            response = s3_client.get_object(Bucket=config_bucket, Key=config_key)
+            config_content = response['Body'].read().decode('utf-8')
+            modeling_config = json.loads(config_content)
+
+            logger.debug(f"Loaded modeling config from: {config_uri}")
+            return modeling_config
+
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                raise FileNotFoundError(f"Modeling config not found at: {config_uri}") from e
+            else:
+                raise ValueError(f"Unable to load modeling config from {config_uri}: {e}") from e
 
 
     def _execute_batch_transform(
