@@ -40,6 +40,10 @@ def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
 #                             X Transformations                            #
 # ------------------------------------------------------------------------ #
 
+
+# Offset Filters
+# --------------
+
 def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
     """
     Convert YYMMDD offset strings to integer days since date_0, with optional shift.
@@ -121,6 +125,11 @@ def select_shifted_offsets(
 
     return df_x_filtered, df_y_filtered
 
+
+
+
+# Row Filters
+# -----------
 
 def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
     """
@@ -268,6 +277,11 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
     filtered_df = df_x_named[combined_mask].reset_index(drop=True)
 
     return filtered_df, combined_mask
+
+
+
+# Column Filters
+# --------------
 
 
 

@@ -5,8 +5,6 @@ model training coordination, and results handling.
 import logging
 import copy
 import traceback
-import tempfile
-import tarfile
 import time
 from typing import List
 from pathlib import Path
@@ -15,7 +13,6 @@ import json
 import numpy as np
 import pandas as pd
 import boto3
-import xgboost as xgb
 from botocore.exceptions import ClientError
 
 # Local modules
