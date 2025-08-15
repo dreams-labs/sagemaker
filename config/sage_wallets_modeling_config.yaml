@@ -13,7 +13,7 @@ metaparams:
     instance_count: 1
     # batch_trans_instance_type: ml.c5.2xlarge
     # batch_trans_instance_type: ml.m5.2xlarge
-    batch_trans_instance_type: ml.m6i.xlarge
+    batch_trans_instance_type: ml.m6i.2xlarge
     batch_trans_instance_count: 1
 
 script_mode:
@@ -67,6 +67,23 @@ training:
             min: 5
         # balance|total_usd_balance|w1:
 
+    # drop_patterns: [
+    #     offset_days,
+    #     balance|*,
+    #     cw_balance|*,
+    #     cluster|*,
+    #     mktcap|*,
+    #     performance|*/w2,
+    #     performance|*/w3,
+    #     performance|*/w4,
+    #     '*scenario|worst/*',
+    #     cw_timing|volume_sma_2/*,
+    #     trading|total_volume|w2,
+    #     trading|unique_coins_traded|all_windows,
+    #     trading|crypto_inflows|all_windows,
+    #     '*transfers|first_buy/*',
+    # ]
+    # protected_columns: []
 
 
 

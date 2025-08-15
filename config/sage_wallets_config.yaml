@@ -5,7 +5,7 @@ training_data: #SageMaker
     training_data_directory: dda_957_rebuild  # where to load local csvs from
     local_directory: dda_956_importance  # where to store local artifacts
     upload_directory: dda-956-importance  # new S3 folder name in bucket training_data_processed
-    download_directory: dda_956_importance_5m  # local directory where scores are stored
+    download_directory: dda_956_importance_5m_nodrops  # local directory where scores are stored
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
@@ -24,7 +24,6 @@ training_data: #SageMaker
         180,
         240,
         300,
-        360
     ]
     date_0: '200127' # the date that all offsets will be numbered relative to
 
