@@ -10,7 +10,7 @@ import numpy as np
 # ensure script_modeling directory is on path for its module
 script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
 sys.path.insert(0, str(script_modeling_dir))
-from custom_transforms import apply_custom_feature_filters, preprocess_custom_labels, select_shifted_offsets, identify_offset_ints
+from custom_transforms import apply_row_filters, preprocess_custom_labels, select_shifted_offsets, identify_offset_ints
 
 # Import from data-science repo
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
@@ -197,7 +197,7 @@ def _process_concatenated_split(
     """
     Common processing for 'test' and 'val':
     1) Epoch-offset selection via select_shifted_offsets
-    2) Custom X filtering via apply_custom_feature_filters
+    2) Custom X filtering via apply_row_filters
     3) Align y and y_pred with masks; labels already preprocessed upstream.
     Returns:
     - y_final (Series)
@@ -240,9 +240,9 @@ def _process_concatenated_split(
 
     # 2) Custom feature filtering
     try:
-        X_filtered, row_mask = apply_custom_feature_filters(X_epoch, metadata, modeling_config)
+        X_filtered, row_mask = apply_row_filters(X_epoch, metadata, modeling_config)
     except ValueError as e:
-        # custom_transforms.apply_custom_feature_filters may raise when all rows are removed
+        # custom_transforms.apply_row_filters may raise when all rows are removed
         if "All rows filtered out by custom filters" in str(e):
             raise SkipEpochEvaluation("No rows remaining after custom feature filters.") from e
         raise
