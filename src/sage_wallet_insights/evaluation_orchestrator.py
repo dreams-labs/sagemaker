@@ -17,7 +17,9 @@ import boto3
 import xgboost as xgb
 
 # Local module imports
-from sage_wallet_modeling.wallet_modeler import WalletModeler
+import sage_wallet_modeling.wallet_modeler as wm
+import script_modeling.custom_transforms as ct
+from sage_wallet_insights import model_evaluation as sime
 import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
@@ -89,13 +91,9 @@ class EvaluationOrchestrator:
 
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                try:
-                    result = future.result()
-                    importance_results[shift] = result
-                    logger.info(f"✓ Analyzed importances for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed importance analysis for epoch_shift={shift}: {e}")
-                    importance_results[shift] = {'error': str(e)}
+                result = future.result()
+                importance_results[shift] = result
+                logger.info(f"✓ Analyzed importances for epoch_shift={shift}")
 
         # Filter out failed extractions
         successful_results = {k: v for k, v in importance_results.items() if 'error' not in v}
@@ -231,6 +229,47 @@ class EvaluationOrchestrator:
         return final_stats
 
 
+    @u.timing_decorator
+    def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
+        """
+        Build a model evaluator for each configured epoch shift using concatenated
+        test/val data and return them in a dict keyed by epoch_shift.
+
+        Returns:
+        - dict: {epoch_shift: evaluator or {'error': str}}
+        """
+        epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
+        if not epoch_shifts:
+            raise ConfigError("No epoch_shifts configured in wallets_config")
+
+        n_threads = self.wallets_config['n_threads']['evaluate_all_models']
+        logger.milestone(
+            f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
+        )
+
+        evaluators_by_shift: dict[int, object] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_shift = {
+                executor.submit(self._build_evaluator_for_shift, shift): shift
+                for shift in epoch_shifts
+            }
+
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                try:
+                    evaluator = future.result()
+                    evaluators_by_shift[shift] = evaluator
+                    logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
+                except Exception as e:
+                    logger.error(f"✗ Failed to build evaluator for epoch_shift={shift}: {e}")
+                    evaluators_by_shift[shift] = {'error': str(e)}
+                    raise e
+
+        return dict(sorted(evaluators_by_shift.items()))
+
+
+
 
 
     # ------------------------
@@ -240,7 +279,7 @@ class EvaluationOrchestrator:
     def _extract_and_analyze_single_importance(self, epoch_shift: int) -> dict:
         """Extract and analyze importances for a single epoch shift model."""
         # Load model info
-        modeler = WalletModeler(
+        modeler = wm.WalletModeler(
             wallets_config=self.wallets_config,
             modeling_config=self.modeling_config,
             date_suffix=f"sh{epoch_shift}",
@@ -337,10 +376,11 @@ class EvaluationOrchestrator:
 
     def _extract_feature_importances(self, model_uri: str) -> pd.DataFrame:
         """
-        Extract feature importances from SageMaker model URI.
+        Extract feature importances from SageMaker model URI, applying the same feature
+        selection that was used during training to ensure accurate mapping.
 
         Returns:
-        - DataFrame: Features and their importance scores, sorted by importance
+        - DataFrame: Features and their importance scores for selected features only
         """
         logger.debug(f"Extracting feature importances from: {model_uri}")
 
@@ -364,19 +404,50 @@ class EvaluationOrchestrator:
             booster = xgb.Booster()
             booster.load_model(str(model_files[0]))
 
-            # Extract importances
+            # Extract importances from XGBoost model
             importance_dict = booster.get_score(importance_type='gain')
 
-            # Load metadata to map feature indices to names
-            metadata = self._load_concatenated_metadata()
-            feature_names = metadata['feature_columns'][1:]  # Skip offset_date column
+            # Load model config to get feature selection rules
+            model_config = wm.load_model_config(model_uri)
 
-            # Build importance DataFrame with proper feature names
-            # Include ALL features, with 0 importance for unused ones
+            # Get full feature list and apply same selection as training
+            metadata = self._load_concatenated_metadata()
+            full_features = metadata['feature_columns'][1:]  # Skip offset_date column
+
+            # Apply feature selection using same logic as training
+            drop_patterns = model_config['training'].get('drop_patterns', [])
+            protected_columns = model_config['training'].get('protected_columns', [])
+
+            if drop_patterns:
+                columns_to_drop = ct.identify_matching_columns(drop_patterns, full_features, protected_columns)
+                selected_features = [col for col in full_features if col not in columns_to_drop]
+            else:
+                selected_features = full_features
+
+            # Validate XGBoost features - assuming 1-based indexing (f1 to fn)
+            expected_max_index = len(selected_features)  # e.g., 188 for 188 features (f1 to f188)
+            xgb_feature_keys = set(importance_dict.keys())
+
+            # Check for unexpected features beyond our expected range
+            unexpected_keys = []
+            for key in xgb_feature_keys:
+                if key.startswith('f'):
+                    index = int(key[1:])
+                    if index > expected_max_index:
+                        unexpected_keys.append(key)
+
+            if unexpected_keys:
+                raise ValueError(
+                    f"XGBoost model contains unexpected feature keys: {unexpected_keys}. "
+                    f"Expected features f1 to f{expected_max_index} based on "
+                    f"{len(selected_features)} selected features after applying drop patterns."
+                )
+
+            # Build importance DataFrame - use 1-based XGBoost indexing
             importance_data = []
-            for i, feat_name in enumerate(feature_names):
-                xgb_feat_key = f'f{i}'  # XGBoost uses f0, f1, f2...
-                importance_value = importance_dict.get(xgb_feat_key, 0.0)  # Default to 0 if not found
+            for i, feat_name in enumerate(selected_features):
+                xgb_feat_key = f'f{i + 1}'  # XGBoost uses 1-based indexing
+                importance_value = importance_dict.get(xgb_feat_key, 0.0)  # Default to 0 for zero-importance features
                 importance_data.append({
                     'feature': feat_name,
                     'importance': importance_value,
@@ -385,8 +456,9 @@ class EvaluationOrchestrator:
 
             importances_df = pd.DataFrame(importance_data).sort_values('importance', ascending=False)
 
-            logger.info(f"Extracted {len(importances_df)} feature importances for model "
+            logger.info(f"Extracted {len(importances_df)} feature importances for selected features only "
                     f"({len([x for x in importance_data if x['importance'] > 0])} non-zero)")
+
             return importances_df
 
 
@@ -402,3 +474,53 @@ class EvaluationOrchestrator:
                 self._metadata_cache['concatenated'] = json.load(f)
 
         return self._metadata_cache['concatenated']
+
+
+
+    def _build_evaluator_for_shift(self, epoch_shift: int):
+        """
+        Build a single evaluator for the provided epoch shift.
+
+        Steps:
+        - Load model info (to obtain model_uri)
+        - Load batch transform predictions for test/val; if missing, run batch transform
+        - Load concatenated y for test/val and align target column name
+        - Construct and return the evaluator object
+        """
+        date_suffix = f"sh{epoch_shift}"
+
+        # Initialize a modeler to get model info and (if needed) run predictions
+        modeler = wm.WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris=None,
+            override_approvals=True
+        )
+
+        # Load model info (raises if not found)
+        model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
+
+        # Load concatenated y for and y_pred
+        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
+        y_val  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
+        y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
+        y_val_pred  = sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix)
+
+        target_var = self.modeling_config['target']['target_var']
+        y_test.columns = [target_var]
+        y_val.columns = [target_var]
+
+        # Build the evaluator using the shared helper in sage_wallet_insights
+        evaluator = sime.create_concatenated_sagemaker_evaluator(
+            self.wallets_config,
+            self.modeling_config,
+            model_info['model_uri'],
+            y_test_pred,
+            y_test,
+            y_val_pred,
+            y_val,
+            epoch_shift
+        )
+
+        return evaluator
