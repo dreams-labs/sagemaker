@@ -8,11 +8,13 @@ Interacts with:
 ---------------
 WalletWorkflowOrchestrator: uses this class for model construction
 """
+import os
 import logging
 from typing import Dict,Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tarfile
+import tempfile
 from pathlib import Path
 import json
 import numpy as np
@@ -32,6 +34,8 @@ from utils import ConfigError
 import sage_utils.config_validation as ucv
 import sage_utils.s3_utils as s3u
 import sage_wallet_modeling.wallet_script_modeler as sm
+import script_modeling.custom_transforms as ct
+
 
 
 # Set up logger at the module level
@@ -301,7 +305,6 @@ class WalletModeler:
             download_preds: bool = True,
             job_name_suffix: str = None,
             override_existing: bool = False,
-            input_filter: str = None
         ):
         """
         Score specified dataset using trained model via SageMaker batch transform.
@@ -312,9 +315,6 @@ class WalletModeler:
             s3_downloads directory
         - job_name_suffix (str): Optional suffix to append to job name for uniqueness
         - override_existing (bool): Whether to overwrite existing local predictions
-        - input_filter (str): JSONPath filter for data preprocessing, e.g.
-            '$[?(@[0] in [60,90,120])][1:]' for epoch shift filtering.
-            If None, uses default column-only filtering
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -347,7 +347,6 @@ class WalletModeler:
             model_name,
             override_existing=override_existing,
             job_name_suffix=job_name_suffix,
-            input_filter=input_filter
         )
 
         # Download if configured
@@ -356,20 +355,91 @@ class WalletModeler:
 
         return result
 
+
+    @u.timing_decorator
+    def predict_with_local_transform(
+            self,
+            dataset_type: str = 'val',
+            download_preds: bool = True,
+            job_name_suffix: str = None,
+            override_existing: bool = False
+        ):
+        """
+        Apply feature selection locally, upload filtered data, then use cloud batch transform.
+
+        This method bypasses SageMaker's 63-character input filter limit by applying
+        feature selection locally before uploading to S3 for batch transform.
+
+        Flow: Local CSV → Local filtering → S3 upload → Batch transform → Download preds
+
+        Params:
+        - dataset_type (str): Type of dataset to score ('val' or 'test')
+        - download_preds (bool): Whether to download the predictions to local directory
+        - job_name_suffix (str): Optional suffix to append to job name for uniqueness
+        - override_existing (bool): Whether to overwrite existing local predictions
+
+        Returns:
+        - dict: Contains transform job name and output S3 URI (same format as predict_with_batch_transform)
+        """
+        # Validate we have a trained model
+        if not self.model_uri:
+            raise ValueError("No trained model available. Call train_model() or "
+                            "load_existing_model() first.")
+
+        logger.info(f"Starting local transform for {dataset_type} dataset...")
+
+        # Step 1: Load local concatenated data with proper column names
+        logger.debug(f"Loading local {dataset_type} data...")
+        df_raw = self._load_local_concatenated_data(dataset_type)
+
+        # Step 2: Load model config to get feature selection settings
+        logger.debug("Loading model configuration...")
+        model_config = load_model_config(self.model_uri)
+
+        # Step 3: Apply feature selection locally
+        logger.debug("Applying feature selection...")
+        df_filtered = self._apply_feature_selection_locally(df_raw, model_config)
+
+        # Step 4: Remove column names for SageMaker compatibility
+        df_sagemaker = df_filtered.copy()
+        df_sagemaker.columns = range(len(df_sagemaker.columns))
+
+        # Step 5: Upload filtered data to temporary S3 location
+        logger.debug("Uploading filtered data to S3...")
+        temp_s3_uri = self._upload_temp_data_for_transform(df_sagemaker, dataset_type)
+
+        # Step 6: Setup model for batch transform
+        model_name = self.model_uri.split('/')[-3]  # Extract model name from URI
+        self._setup_model_for_batch_transform(model_name)
+
+        # Step 7: Execute batch transform with no input filter (data pre-filtered)
+        logger.debug("Executing batch transform...")
+        result = self._execute_batch_transform(
+            dataset_uri=temp_s3_uri,
+            model_name=model_name,
+            override_existing=override_existing,
+            job_name_suffix=job_name_suffix
+        )
+
+        # Step 8: Download predictions if requested
+        if download_preds:
+            self._download_batch_transform_preds(result['predictions_uri'], dataset_type)
+
+        logger.info(f"Local transform prediction completed for {dataset_type}")
+
+        return result
+
+
     @u.timing_decorator
     def batch_predict_test_and_val(
             self,
-            overwrite_existing: bool = False,
-            offset_filters: dict = None
+            overwrite_existing: bool = False
         ) -> dict[str, dict]:
         """
         Run batch transform predictions for 'test' and 'val' in parallel.
 
         Params:
         - overwrite_existing (bool): Whether to overwrite existing local predictions
-        - offset_filters (dict): JSONPath filters for epoch shift filtering, format:
-            {'test': '$[?(@[0] in [60,90,120])][1:]', 'val': '$[?(@[0] in [90,120,150])][1:]'}
-            If None, uses default column-only filtering
 
         Returns:
         - dict: Mapping split name ('test' or 'val') to the batch transform result dict.
@@ -380,12 +450,11 @@ class WalletModeler:
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_to_split = {
                 executor.submit(
-                    self.predict_with_batch_transform,
+                    self.predict_with_local_transform,
                     dataset_type=split,
                     download_preds=True,
                     job_name_suffix=f"concat-{split}",
                     override_existing=overwrite_existing,
-                    input_filter=offset_filters.get(split) if offset_filters else None
                 ): split
                 for split in splits
             }
@@ -585,56 +654,156 @@ class WalletModeler:
         scoring_model.create()
 
 
-    def _load_model_config(self) -> dict:
+    def _load_local_concatenated_data(self, split_name: str) -> pd.DataFrame:
         """
-        Reconstruct the modeling config path from self.model_uri and load it.
+        Load CSV data from local s3_uploads/wallet_training_data_concatenated/ folder
+        with proper feature column names from metadata.
 
-        Example transformation:         # pylint:disable=line-too-long
-        model_uri: s3://wallet-script-models/model-outputs/dda-956-importance-dev/sh0/wscr-dda-956--sh0-0814-150127/output/model.tar.gz
-        config_uri: s3://wallet-script-models/dda-956-importance-dev/config/wscr-dda-956--sh0-0814-150127/modeling_config.json
+        Params:
+        - split_name (str): Name of the split to load ('train', 'test', 'eval', 'val')
 
         Returns:
-        - dict: The modeling configuration used to train this specific model
+        - DataFrame: Loaded data with proper column names from metadata
+
+        Raises:
+        - FileNotFoundError: If .csv.gz file or metadata.json does not exist
         """
-        if not self.model_uri:
-            raise ValueError("No model URI available. Call train_model() or load_existing_model() first.")
+        # Build path to concatenated data directory
+        base_dir = Path(self.wallets_config['training_data']['local_s3_root'])
+        concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
+        local_dir = self.wallets_config['training_data']['local_directory']
+        data_path = concat_dir / local_dir
 
-        if not self.model_uri.startswith('s3://'):
-            raise ValueError(f"Invalid S3 URI format: {self.model_uri}")
+        # Load gzip file
+        gz_file = data_path / f"{split_name}.csv.gz"
 
-        # Parse the model URI structure
-        # Expected: s3://bucket/model-outputs/upload_dir/date_suffix/job_name/output/model.tar.gz
-        uri_parts = self.model_uri.replace('s3://', '').split('/')
+        if not gz_file.exists():
+            raise FileNotFoundError(
+                f"Concatenated data file not found: {gz_file}"
+            )
 
-        if len(uri_parts) < 6 or uri_parts[1] != 'model-outputs':
-            raise ValueError(f"Unexpected model URI structure: {self.model_uri}")
+        logger.debug(f"Loading {split_name} data from: {gz_file}")
+        df = pd.read_csv(gz_file, header=None, compression='gzip')
 
-        # pylint:disable=unused-variable
-        bucket = uri_parts[0]
-        upload_dir = uri_parts[2]  # e.g., 'dda-956-importance-dev'
-        date_suffix = uri_parts[3]  # e.g., 'sh0'
-        job_name = uri_parts[4]     # e.g., 'wscr-dda-956--sh0-0814-150127'
+        # Load metadata to get feature column names
+        metadata_file = data_path / 'metadata.json'
 
-        # Construct config URI
-        config_uri = f"s3://{bucket}/{upload_dir}/config/{job_name}/modeling_config.json"
+        if not metadata_file.exists():
+            raise FileNotFoundError(
+                f"Metadata file not found: {metadata_file}"
+            )
 
-        # Download and parse the config
-        s3_client = self.sagemaker_session.boto_session.client('s3')
-        config_bucket, config_key = config_uri.replace('s3://', '').split('/', 1)
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
 
+        feature_columns = metadata['feature_columns']
+
+        # Validate column count matches
+        if len(feature_columns) != df.shape[1]:
+            raise ValueError(
+                f"Column count mismatch: metadata has {len(feature_columns)} columns, "
+                f"DataFrame has {df.shape[1]} columns"
+            )
+
+        # Assign proper column names to DataFrame
+        df.columns = feature_columns
+
+        logger.info(f"Loaded {split_name} data: {df.shape[0]:,} rows × {df.shape[1]} columns with feature names")
+
+        # Validate data is not empty
+        if df.empty:
+            raise ValueError(f"Loaded {split_name} data is empty")
+
+        # Check for any NaN values
+        if df.isnull().any().any():
+            nan_cols = df.columns[df.isnull().any()].tolist()
+            logger.warning(f"Found NaN values in {split_name} data columns: {nan_cols}")
+
+        return df
+
+
+    def _apply_feature_selection_locally(self, df: pd.DataFrame, modeling_config: dict) -> pd.DataFrame:
+        """
+        Apply feature selection to DataFrame using the same logic as training.
+
+        This recreates the column filtering logic from custom_transforms.apply_column_filters()
+        by applying the same drop_patterns to the DataFrame with proper column names.
+
+        Params:
+        - df (DataFrame): Data with proper feature column names (from _load_local_concatenated_data)
+        - modeling_config (dict): The modeling configuration with drop_patterns and protected_columns
+
+        Returns:
+        - DataFrame: Filtered DataFrame with only selected columns, retaining column names
+        """
+        # Extract filter configuration
+        drop_patterns = modeling_config['training'].get('drop_patterns', [])
+        protected_columns = modeling_config['training'].get('protected_columns', [])
+
+        if not drop_patterns:
+            logger.info("No drop patterns configured, returning unfiltered data")
+            return df.copy()
+
+        # Get all column names from the DataFrame
+        feature_columns = df.columns.tolist()
+
+        # Apply the same column filtering logic as custom_transforms.py
+        columns_to_drop = ct.identify_matching_columns(
+            drop_patterns,
+            feature_columns,
+            protected_columns
+        )
+
+        # Get selected columns (those not dropped)
+        selected_columns = [col for col in feature_columns if col not in columns_to_drop]
+
+        logger.info(f"Feature selection: {len(selected_columns)}/{len(feature_columns)} columns selected")
+
+        # Filter DataFrame to selected columns only
+        df_filtered = df[selected_columns].copy()
+
+        # Validate result
+        if df_filtered.shape[1] == 0:
+            raise ValueError("No columns remaining after feature selection")
+
+        logger.info(f"Applied feature selection: {df_filtered.shape[0]:,} rows × {df_filtered.shape[1]} columns")
+
+        return df_filtered
+
+
+    def _upload_temp_data_for_transform(self, df: pd.DataFrame, dataset_type: str) -> str:
+        """
+        Upload filtered DataFrame to temporary S3 location for batch transform.
+
+        Params:
+        - df (DataFrame): Filtered data ready for batch transform (no headers)
+        - dataset_type (str): Type of dataset ('val' or 'test') for path naming
+
+        Returns:
+        - str: S3 URI of uploaded temporary data file
+        """
+        # Generate temporary S3 path
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        bucket = self.wallets_config['aws']['training_bucket']
+        temp_key = (f"temp-transform-data/{self.upload_directory}/"
+                    f"{self.date_suffix}/{dataset_type}-filtered-{timestamp}.csv.gz")
+        temp_s3_uri = f"s3://{bucket}/{temp_key}"
+
+        # Write to temporary local file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv.gz', delete=False) as tmp_file:
+            df.to_csv(tmp_file.name, index=False, header=False, compression='gzip')
+            tmp_path = tmp_file.name
+
+        # Upload to S3
+        s3_client = boto3.client('s3')
         try:
-            response = s3_client.get_object(Bucket=config_bucket, Key=config_key)
-            config_content = response['Body'].read().decode('utf-8')
-            modeling_config = json.loads(config_content)
+            s3_client.upload_file(tmp_path, bucket, temp_key)
+            logger.debug(f"Uploaded filtered data to: {temp_s3_uri}")
+        finally:
+            # Clean up temporary file
+            os.unlink(tmp_path)
 
-            logger.debug(f"Loaded modeling config from: {config_uri}")
-            return modeling_config
-
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                raise FileNotFoundError(f"Modeling config not found at: {config_uri}") from e
-            else:
-                raise ValueError(f"Unable to load modeling config from {config_uri}: {e}") from e
+        return temp_s3_uri
 
 
     def _execute_batch_transform(
@@ -642,8 +811,7 @@ class WalletModeler:
             dataset_uri: str,
             model_name: str,
             override_existing: bool = False,
-            job_name_suffix: str = None,
-            input_filter: str = None
+            job_name_suffix: str = None
         ):
         """
         Execute batch transform job for specified dataset URI.
@@ -653,9 +821,6 @@ class WalletModeler:
         - model_name (str): Name of registered SageMaker model
         - override_existing (bool): Whether to overwrite existing output files
         - job_name_suffix (str): Optional suffix to append to job name for uniqueness
-        - input_filter (str): JSONPath filter for data preprocessing. If None, defaults to
-            '$[1:]' for column-only filtering. For epoch shifts, uses format like
-            '$[?(@[0] in [60,90,120])][1:]' to filter rows and columns
 
         Returns:
         - dict: Contains transform job name and output S3 URI
@@ -689,9 +854,6 @@ class WalletModeler:
             else:
                 logger.warning(f"Output exists at: {predictions_uri}. Overwriting...")
 
-        # Determine input filter - use provided filter or default to column-only
-        effective_filter = input_filter if input_filter is not None else '$[1:]'
-
         transformer = Transformer(
             model_name=model_name,
             instance_count=self.modeling_config['metaparams']['instance_count'],
@@ -705,7 +867,6 @@ class WalletModeler:
         logger.debug(f"Using model: {model_name}")
         logger.debug(f"Input data: {dataset_uri}")
         logger.debug(f"Output path: {output_path}")
-        logger.debug(f"Input filter: {effective_filter}")
 
         transformer.transform(
             data=dataset_uri,
@@ -715,7 +876,7 @@ class WalletModeler:
             wait=True,
             logs=False,
             compression_type='Gzip',
-            input_filter=effective_filter
+            input_filter=None
         )
 
         # Store predictions URI
@@ -925,3 +1086,64 @@ class WalletModeler:
         Generate deterministic endpoint name prefix based on framework and upload folder.
         """
         return f"{self.modeling_config['framework']['name']}-{self.upload_directory}"
+
+
+
+
+
+
+# ------------------------------
+#       Utility Functions
+# ------------------------------
+
+def load_model_config(model_uri) -> dict:
+    """
+    Reconstruct the modeling config path from a model_uri and load it.
+
+    Example transformation:         # pylint:disable=line-too-long
+    model_uri: s3://wallet-script-models/model-outputs/dda-956-importance-dev/sh0/wscr-dda-956--sh0-0814-150127/output/model.tar.gz
+    config_uri: s3://wallet-script-models/dda-956-importance-dev/config/wscr-dda-956--sh0-0814-150127/modeling_config.json
+
+    Returns:
+    - dict: The modeling configuration used to train this specific model
+    """
+    if not model_uri:
+        raise ValueError("No model URI available. Call train_model() or load_existing_model() first.")
+
+    if not model_uri.startswith('s3://'):
+        raise ValueError(f"Invalid S3 URI format: {model_uri}")
+
+    # Parse the model URI structure
+    # Expected: s3://bucket/model-outputs/upload_dir/date_suffix/job_name/output/model.tar.gz
+    uri_parts = model_uri.replace('s3://', '').split('/')
+
+    if len(uri_parts) < 6 or uri_parts[1] != 'model-outputs':
+        raise ValueError(f"Unexpected model URI structure: {model_uri}")
+
+    # pylint:disable=unused-variable
+    bucket = uri_parts[0]
+    upload_dir = uri_parts[2]  # e.g., 'dda-956-importance-dev'
+    date_suffix = uri_parts[3]  # e.g., 'sh0'
+    job_name = uri_parts[4]     # e.g., 'wscr-dda-956--sh0-0814-150127'
+
+    # Construct config URI
+    config_uri = f"s3://{bucket}/{upload_dir}/config/{job_name}/modeling_config.json"
+
+    # Download and parse the config
+    sagemaker_session = sagemaker.Session()
+    s3_client = sagemaker_session.boto_session.client('s3')
+    config_bucket, config_key = config_uri.replace('s3://', '').split('/', 1)
+
+    try:
+        response = s3_client.get_object(Bucket=config_bucket, Key=config_key)
+        config_content = response['Body'].read().decode('utf-8')
+        modeling_config = json.loads(config_content)
+
+        logger.debug(f"Loaded modeling config from: {config_uri}")
+        return modeling_config
+
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise FileNotFoundError(f"Modeling config not found at: {config_uri}") from e
+        else:
+            raise ValueError(f"Unable to load modeling config from {config_uri}: {e}") from e
