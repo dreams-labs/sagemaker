@@ -61,7 +61,7 @@ training:
         cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
             cli: cw_mkt_cap
             min: 5000000
-            # max: 150000000
+            # max: 25000000
         # trading|crypto_inflows|all_windows:
         trading|unique_coins_traded|all_windows:
             min: 5
