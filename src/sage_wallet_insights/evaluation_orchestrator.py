@@ -257,14 +257,9 @@ class EvaluationOrchestrator:
 
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                try:
-                    evaluator = future.result()
-                    evaluators_by_shift[shift] = evaluator
-                    logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed to build evaluator for epoch_shift={shift}: {e}")
-                    evaluators_by_shift[shift] = {'error': str(e)}
-                    raise e
+                evaluator = future.result()
+                evaluators_by_shift[shift] = evaluator
+                logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
 
         return dict(sorted(evaluators_by_shift.items()))
 

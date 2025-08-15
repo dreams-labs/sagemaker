@@ -240,7 +240,7 @@ def _process_concatenated_split(
 
     # 2) Custom feature filtering
     try:
-        X_filtered, row_mask = apply_row_filters(X_epoch, metadata, modeling_config)
+        X_filtered, row_mask = apply_row_filters(X_epoch, metadata['feature_columns'], modeling_config)
     except ValueError as e:
         # custom_transforms.apply_row_filters may raise when all rows are removed
         if "All rows filtered out by custom filters" in str(e):
