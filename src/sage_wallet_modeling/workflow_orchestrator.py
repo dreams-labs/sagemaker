@@ -655,15 +655,14 @@ class WalletWorkflowOrchestrator:
 
         Params:
         - overwrite_existing (bool): If False, skip epoch_shifts where both local
-          predictions exist. If True, re-run and overwrite any existing predictions.
+        predictions exist. If True, re-run and overwrite any existing predictions.
         - retry_attempts (int): Number of times to retry if throttled.
         - retry_delay_seconds (int): Initial delay (in seconds) before the first retry.
         - retry_backoff (float): Multiplier applied to delay after each failed attempt (exponential backoff).
 
         Returns:
         - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}} for shifts executed.
-            Only successfully executed shifts are returned. Failures after retries are included
-            with an 'error' key as before.
+            Raises exceptions immediately if any predictions fail.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         n_threads = self.wallets_config['n_threads']['predict_all_models']
@@ -695,8 +694,8 @@ class WalletWorkflowOrchestrator:
 
         prediction_results: dict[int, dict] = {}
 
+        # Submit all jobs and collect results without error handling
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-            # Submit only required epoch shift predictions
             future_to_shift = {
                 executor.submit(
                     self._predict_single_epoch_shift_with_retry,
@@ -710,24 +709,18 @@ class WalletWorkflowOrchestrator:
                 for epoch_shift in shifts_to_run
             }
 
-            # Collect results as they complete
+            # Collect results - let any exceptions bubble up immediately
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                try:
-                    result = future.result()
-                    prediction_results[shift] = result
-                    logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed predictions for epoch_shift={shift}: {e}")
-                    prediction_results[shift] = {'error': str(e)}
+                result = future.result()  # This will raise any exception from the worker
+                prediction_results[shift] = result
+                logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
 
         # Summary
-        successful = len([r for r in prediction_results.values() if 'error' not in r])
-        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(prediction_results)} successful")
+        successful = len(prediction_results)
+        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(shifts_to_run)} successful")
 
         return prediction_results
-
-
 
 
 

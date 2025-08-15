@@ -1,6 +1,6 @@
 import sys
 import logging
-from typing import Tuple, Union, Dict
+from typing import Tuple, Union
 from pathlib import Path
 import json
 import pandas as pd
@@ -11,6 +11,7 @@ import numpy as np
 script_modeling_dir = Path(__file__).resolve().parents[1] / "script_modeling"
 sys.path.insert(0, str(script_modeling_dir))
 from custom_transforms import apply_row_filters, preprocess_custom_labels, select_shifted_offsets, identify_offset_ints
+import sage_wallet_insights.evaluation_orchestrator as eo
 
 # Import from data-science repo
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
@@ -32,7 +33,6 @@ class SkipEpochEvaluation(Exception):
 # --------------------------
 #      Primary Interface
 # --------------------------
-
 @u.timing_decorator
 def create_concatenated_sagemaker_evaluator(
     wallets_config: dict,
@@ -42,7 +42,9 @@ def create_concatenated_sagemaker_evaluator(
     y_test: pd.DataFrame,
     y_val_pred: pd.Series = None,
     y_val: pd.DataFrame = None,
-    epoch_shift: int = 0
+    epoch_shift: int = 0,
+    y_train: pd.Series = None,
+    X_train: pd.DataFrame = None
 ) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
     """
     Create a SageMaker evaluator for concatenated model results with optional validation set.
@@ -56,6 +58,8 @@ def create_concatenated_sagemaker_evaluator(
     - y_val_pred (Series, optional): Predicted values for validation set
     - y_val (DataFrame, optional): Single-column actual target for the validation set
     - epoch_shift (int, optional): How many days to shift the base offsets in wallets_config
+    - y_train (Series, optional): Pre-loaded training target data
+    - X_train (DataFrame, optional): Pre-loaded training feature data
 
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
@@ -72,8 +76,13 @@ def create_concatenated_sagemaker_evaluator(
         logger.warning("Skipping evaluation for epoch_shift=%s (all rows filtered out).", epoch_shift)
         return None
 
-    # For custom transforms, we still need to load train data normally
-    y_train, X_train, _ = _load_concatenated_features(wallets_config)
+    # Load train data - use pre-loaded if provided, otherwise load fresh
+    if y_train is not None and X_train is not None:
+        train_y = y_train
+        train_X = X_train
+    else:
+        train_y, train_X = eo.load_concatenated_features(wallets_config)
+
     y_test_series = y_test_final
     y_test_pred = y_test_pred_final
 
@@ -154,8 +163,8 @@ def create_concatenated_sagemaker_evaluator(
         "model_id": model_uri,
         "modeling_config": wime_modeling_config,
         "model_type": model_type,
-        "X_train": X_train,
-        "y_train": y_train,
+        "X_train": train_X,
+        "y_train": train_y,
         "X_test": X_test_final,
         "y_test": y_test_series,
         "y_pred": y_pred,
@@ -178,7 +187,6 @@ def create_concatenated_sagemaker_evaluator(
         return wime.RegressorEvaluator(wallet_model_results)
     else:
         return wime.ClassifierEvaluator(wallet_model_results)
-
 
 # --------------------------
 #      Helper Functions
@@ -266,52 +274,6 @@ def _process_concatenated_split(
 
     return y_final, X_filtered, y_pred_filtered, row_mask, epoch_mask_full
 
-
-# Helper to load concatenated train/test features and y_train, and rename columns
-def _load_concatenated_features(
-    wallets_config: Dict
-) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
-    """
-    Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
-    and rename feature columns for X_train and X_test.
-
-    Returns:
-    - y_train (Series)
-    - X_train (DataFrame)
-    - X_test (DataFrame)
-    """
-    base_dir = Path(wallets_config['training_data']['local_s3_root'])
-    concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
-    local_dir = wallets_config['training_data']['local_directory']
-    data_path = concat_dir / local_dir
-
-    train_gz = data_path / 'train.csv.gz'
-    test_gz = data_path / 'test.csv.gz'
-    train_csv = data_path / 'train.csv'
-    test_csv = data_path / 'test.csv'
-
-    train_path = train_gz if train_gz.exists() else train_csv
-    test_path = test_gz if test_gz.exists() else test_csv
-
-    X_train = pd.read_csv(train_path, header=None, compression='infer')
-    X_test = pd.read_csv(test_path, header=None, compression='infer')
-
-    # First column is always y_train
-    y_train = X_train.iloc[:, 0]
-
-    # Validate feature dimensions
-    expected_n = X_train.shape[1]
-    if X_test.shape[1] != expected_n:
-        raise ValueError(
-            f"Feature count mismatch: train has {expected_n}, test has {X_test.shape[1]}"
-        )
-
-    # Rename feature columns
-    feature_names = [f"feature_{i}" for i in range(expected_n)]
-    X_train.columns = feature_names
-    X_test.columns = feature_names
-
-    return y_train, X_train, X_test
 
 
 def load_endpoint_sagemaker_predictions(

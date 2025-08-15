@@ -8,6 +8,7 @@ that have already been trained by WalletWorkflowOrchestrator.
 import sys
 import logging
 import concurrent.futures
+from typing import Dict,Tuple
 import json
 import tarfile
 import tempfile
@@ -27,6 +28,8 @@ import sage_utils.config_validation as ucv
 # Import from data-science repo   # pylint:disable=wrong-import-position
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.wallet_validation_analysis as wiva
+
+# pylint:disable=invalid-name  # X isn't lowercase
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -236,7 +239,7 @@ class EvaluationOrchestrator:
         test/val data and return them in a dict keyed by epoch_shift.
 
         Returns:
-        - dict: {epoch_shift: evaluator or {'error': str}}
+        - dict: {epoch_shift: evaluator} - raises immediately if any evaluator fails to build
         """
         epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
         if not epoch_shifts:
@@ -247,24 +250,39 @@ class EvaluationOrchestrator:
             f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
         )
 
+        # Load shared data once - identical across all epoch shifts
+        logger.info("Loading shared target and feature data...")
+        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
+        y_val = sime.load_concatenated_y('val', self.wallets_config, self.modeling_config)
+        y_train, X_train = load_concatenated_features(self.wallets_config)
+        logger.info("Target and feature data loaded successfully.")
+
+        target_var = self.modeling_config['target']['target_var']
+        y_test.columns = [target_var]
+        y_val.columns = [target_var]
+
         evaluators_by_shift: dict[int, object] = {}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
             future_to_shift = {
-                executor.submit(self._build_evaluator_for_shift, shift): shift
+                executor.submit(
+                    self._build_evaluator_for_shift,
+                    shift,
+                    y_test,
+                    y_val,
+                    y_train,
+                    X_train
+                ): shift
                 for shift in epoch_shifts
             }
 
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                evaluator = future.result()
+                evaluator = future.result()  # This will raise any exception from the worker
                 evaluators_by_shift[shift] = evaluator
                 logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
 
         return dict(sorted(evaluators_by_shift.items()))
-
-
-
 
 
     # ------------------------
@@ -471,20 +489,21 @@ class EvaluationOrchestrator:
         return self._metadata_cache['concatenated']
 
 
-
-    def _build_evaluator_for_shift(self, epoch_shift: int):
+    def _build_evaluator_for_shift(
+            self,
+            epoch_shift: int,
+            y_test: pd.DataFrame,
+            y_val: pd.DataFrame,
+            y_train: pd.Series,
+            X_train: pd.DataFrame
+        ):
         """
         Build a single evaluator for the provided epoch shift.
-
-        Steps:
-        - Load model info (to obtain model_uri)
-        - Load batch transform predictions for test/val; if missing, run batch transform
-        - Load concatenated y for test/val and align target column name
-        - Construct and return the evaluator object
+        Uses pre-loaded data passed from orchestrator.
         """
         date_suffix = f"sh{epoch_shift}"
 
-        # Initialize a modeler to get model info and (if needed) run predictions
+        # Initialize a modeler to get model info
         modeler = wm.WalletModeler(
             wallets_config=self.wallets_config,
             modeling_config=self.modeling_config,
@@ -496,17 +515,11 @@ class EvaluationOrchestrator:
         # Load model info (raises if not found)
         model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
 
-        # Load concatenated y for and y_pred
-        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
-        y_val  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
+        # Load epoch-specific predictions
         y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
-        y_val_pred  = sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix)
+        y_val_pred = sime.load_bt_sagemaker_predictions('val', self.wallets_config, date_suffix)
 
-        target_var = self.modeling_config['target']['target_var']
-        y_test.columns = [target_var]
-        y_val.columns = [target_var]
-
-        # Build the evaluator using the shared helper in sage_wallet_insights
+        # Build the evaluator using the shared helper (pass pre-loaded features)
         evaluator = sime.create_concatenated_sagemaker_evaluator(
             self.wallets_config,
             self.modeling_config,
@@ -515,7 +528,43 @@ class EvaluationOrchestrator:
             y_test,
             y_val_pred,
             y_val,
-            epoch_shift
+            epoch_shift,
+            y_train,
+            X_train
         )
 
         return evaluator
+
+
+
+# Helper to load concatenated train/test features and y_train, and rename columns
+def load_concatenated_features(
+    wallets_config: Dict
+) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
+    """
+    Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
+    and rename feature columns for X_train.
+
+    Returns:
+    - y_train (Series)
+    - X_train (DataFrame)
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
+    local_dir = wallets_config['training_data']['local_directory']
+    data_path = concat_dir / local_dir
+    train_path = data_path / 'train.csv.gz'
+
+    X_train = pd.read_csv(train_path, header=None, compression='infer')
+
+    # First column is always y_train
+    y_train = X_train.iloc[:, 0]
+
+    # Validate feature dimensions
+    expected_n = X_train.shape[1]
+
+    # Rename feature columns
+    feature_names = [f"feature_{i}" for i in range(expected_n)]
+    X_train.columns = feature_names
+
+    return y_train, X_train
