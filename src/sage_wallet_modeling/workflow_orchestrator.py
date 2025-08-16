@@ -5,8 +5,6 @@ model training coordination, and results handling.
 import logging
 import copy
 import traceback
-import tempfile
-import tarfile
 import time
 from typing import List
 from pathlib import Path
@@ -15,7 +13,6 @@ import json
 import numpy as np
 import pandas as pd
 import boto3
-import xgboost as xgb
 from botocore.exceptions import ClientError
 
 # Local modules
@@ -26,7 +23,6 @@ import script_modeling.custom_transforms as ct
 import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
-from sage_wallet_insights import model_evaluation as sime
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -659,15 +655,14 @@ class WalletWorkflowOrchestrator:
 
         Params:
         - overwrite_existing (bool): If False, skip epoch_shifts where both local
-          predictions exist. If True, re-run and overwrite any existing predictions.
+        predictions exist. If True, re-run and overwrite any existing predictions.
         - retry_attempts (int): Number of times to retry if throttled.
         - retry_delay_seconds (int): Initial delay (in seconds) before the first retry.
         - retry_backoff (float): Multiplier applied to delay after each failed attempt (exponential backoff).
 
         Returns:
         - dict: {epoch_shift: {'test': result, 'val': result, 'model_uri': str}} for shifts executed.
-            Only successfully executed shifts are returned. Failures after retries are included
-            with an 'error' key as before.
+            Raises exceptions immediately if any predictions fail.
         """
         epoch_shifts = self.wallets_config['training_data']['epoch_shifts']
         n_threads = self.wallets_config['n_threads']['predict_all_models']
@@ -699,8 +694,8 @@ class WalletWorkflowOrchestrator:
 
         prediction_results: dict[int, dict] = {}
 
+        # Submit all jobs and collect results without error handling
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-            # Submit only required epoch shift predictions
             future_to_shift = {
                 executor.submit(
                     self._predict_single_epoch_shift_with_retry,
@@ -714,64 +709,18 @@ class WalletWorkflowOrchestrator:
                 for epoch_shift in shifts_to_run
             }
 
-            # Collect results as they complete
+            # Collect results - let any exceptions bubble up immediately
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                try:
-                    result = future.result()
-                    prediction_results[shift] = result
-                    logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed predictions for epoch_shift={shift}: {e}")
-                    prediction_results[shift] = {'error': str(e)}
+                result = future.result()  # This will raise any exception from the worker
+                prediction_results[shift] = result
+                logger.milestone(f"✓ Completed predictions for epoch_shift={shift}")
 
         # Summary
-        successful = len([r for r in prediction_results.values() if 'error' not in r])
-        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(prediction_results)} successful")
+        successful = len(prediction_results)
+        logger.milestone(f"Epoch shift predictions complete: {successful}/{len(shifts_to_run)} successful")
 
         return prediction_results
-
-
-    @u.timing_decorator
-    def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
-        """
-        Build a model evaluator for each configured epoch shift using concatenated
-        test/val data and return them in a dict keyed by epoch_shift.
-
-        Returns:
-        - dict: {epoch_shift: evaluator or {'error': str}}
-        """
-        epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
-        if not epoch_shifts:
-            raise ConfigError("No epoch_shifts configured in wallets_config")
-
-        n_threads = self.wallets_config['n_threads']['evaluate_all_models']
-        logger.milestone(
-            f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
-        )
-
-        evaluators_by_shift: dict[int, object] = {}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-            future_to_shift = {
-                executor.submit(self._build_evaluator_for_shift, shift): shift
-                for shift in epoch_shifts
-            }
-
-            for future in concurrent.futures.as_completed(future_to_shift):
-                shift = future_to_shift[future]
-                try:
-                    evaluator = future.result()
-                    evaluators_by_shift[shift] = evaluator
-                    logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed to build evaluator for epoch_shift={shift}: {e}")
-                    evaluators_by_shift[shift] = {'error': str(e)}
-                    raise e
-
-        return dict(sorted(evaluators_by_shift.items()))
-
-
 
 
 
@@ -1181,8 +1130,10 @@ class WalletWorkflowOrchestrator:
             logger.error(f"No model found for epoch_shift={epoch_shift}")
             raise e
 
-        # Run batch predictions for test and val (this runs them in parallel internally)
-        pred_results = modeler.batch_predict_test_and_val(overwrite_existing=overwrite_existing)
+        # Run batch predictions for test and val with epoch filtering
+        pred_results = modeler.batch_predict_test_and_val(
+            overwrite_existing=overwrite_existing
+        )
 
         # Compile results
         return {
@@ -1240,53 +1191,6 @@ class WalletWorkflowOrchestrator:
         return {}
 
 
-    def _build_evaluator_for_shift(self, epoch_shift: int):
-        """
-        Build a single evaluator for the provided epoch shift.
-
-        Steps:
-        - Load model info (to obtain model_uri)
-        - Load batch transform predictions for test/val; if missing, run batch transform
-        - Load concatenated y for test/val and align target column name
-        - Construct and return the evaluator object
-        """
-        date_suffix = f"sh{epoch_shift}"
-
-        # Initialize a modeler to get model info and (if needed) run predictions
-        modeler = WalletModeler(
-            wallets_config=self.wallets_config,
-            modeling_config=self.modeling_config,
-            date_suffix=date_suffix,
-            s3_uris=None,
-            override_approvals=True
-        )
-
-        # Load model info (raises if not found)
-        model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
-
-        # Load concatenated y for and y_pred
-        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
-        y_val  = sime.load_concatenated_y('val',  self.wallets_config, self.modeling_config)
-        y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
-        y_val_pred  = sime.load_bt_sagemaker_predictions('val',  self.wallets_config, date_suffix)
-
-        target_var = self.modeling_config['target']['target_var']
-        y_test.columns = [target_var]
-        y_val.columns = [target_var]
-
-        # Build the evaluator using the shared helper in sage_wallet_insights
-        evaluator = sime.create_concatenated_sagemaker_evaluator(
-            self.wallets_config,
-            self.modeling_config,
-            model_info['model_uri'],
-            y_test_pred,
-            y_test,
-            y_val_pred,
-            y_val,
-            epoch_shift
-        )
-
-        return evaluator
 
 
 # ---------------------------------

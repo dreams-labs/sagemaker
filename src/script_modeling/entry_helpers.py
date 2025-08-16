@@ -24,19 +24,32 @@ def get_valid_hyperparameters(modeling_config) -> dict:
     """
     # Base hyperparameters that are always valid
     base_types = {
+        # Tree params
         'num_boost_round': int,
         'max_depth': int,
         'min_child_weight': int,
         'eta': float,
         'early_stopping_rounds': int,
+
+        # Sampling params
         'colsample_bytree': float,
         'subsample': float,
         'scale_pos_weight': float,
+
+        # Regularization
         'alpha': float,
         'lambda': float,
         'gamma': float,
+
+        # Target var
         'threshold': float,
-        'epoch_shift': int
+
+        # Epoch shift
+        'epoch_shift': int,
+
+        # Pattern-based feature selection
+        'drop_patterns': str,  # JSON string of patterns list
+        'protected_columns': str,  # JSON string of protected columns list
     }
 
     # Add dynamic filter parameters if config provided

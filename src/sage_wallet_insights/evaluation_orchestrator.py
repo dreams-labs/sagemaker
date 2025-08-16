@@ -8,6 +8,7 @@ that have already been trained by WalletWorkflowOrchestrator.
 import sys
 import logging
 import concurrent.futures
+from typing import Dict,Tuple
 import json
 import tarfile
 import tempfile
@@ -17,7 +18,9 @@ import boto3
 import xgboost as xgb
 
 # Local module imports
-from sage_wallet_modeling.wallet_modeler import WalletModeler
+import sage_wallet_modeling.wallet_modeler as wm
+import script_modeling.custom_transforms as ct
+from sage_wallet_insights import model_evaluation as sime
 import utils as u
 from utils import ConfigError
 import sage_utils.config_validation as ucv
@@ -25,6 +28,8 @@ import sage_utils.config_validation as ucv
 # Import from data-science repo   # pylint:disable=wrong-import-position
 sys.path.append(str(Path("..") / ".." / "data-science" / "src"))
 import wallet_insights.wallet_validation_analysis as wiva
+
+# pylint:disable=invalid-name  # X isn't lowercase
 
 # Set up logger at the module level
 logger = logging.getLogger(__name__)
@@ -89,13 +94,9 @@ class EvaluationOrchestrator:
 
             for future in concurrent.futures.as_completed(future_to_shift):
                 shift = future_to_shift[future]
-                try:
-                    result = future.result()
-                    importance_results[shift] = result
-                    logger.info(f"✓ Analyzed importances for epoch_shift={shift}")
-                except Exception as e:
-                    logger.error(f"✗ Failed importance analysis for epoch_shift={shift}: {e}")
-                    importance_results[shift] = {'error': str(e)}
+                result = future.result()
+                importance_results[shift] = result
+                logger.info(f"✓ Analyzed importances for epoch_shift={shift}")
 
         # Filter out failed extractions
         successful_results = {k: v for k, v in importance_results.items() if 'error' not in v}
@@ -153,7 +154,7 @@ class EvaluationOrchestrator:
         if complete_df is None:
             if not hasattr(self, '_complete_importance_df'):
                 raise ValueError("No complete importance data available. "
-                                 "Call generate_all_feature_importances() first.")
+                                "Call generate_all_feature_importances() first.")
             complete_df = self._complete_importance_df
 
         # Default grouping
@@ -168,6 +169,17 @@ class EvaluationOrchestrator:
 
         if feature_names_filter:
             filtered_df = filtered_df[filtered_df['feature_name'].isin(feature_names_filter)]
+
+        # Calculate column count for each group
+        # Count unique features per group (accounting for multiple offsets per feature)
+        num_offsets = filtered_df['epoch_shift'].nunique()
+        column_counts = (filtered_df
+                        .groupby(groups)
+                        .size()
+                        .div(num_offsets)
+                        .round().astype(int)
+                        .to_frame('column_count')
+                        .reset_index())
 
         # KEY CHANGE: First aggregate by model and group combination
         # This sums all features within each category for each model
@@ -202,6 +214,15 @@ class EvaluationOrchestrator:
             'total_importance_sum', 'importance_mean'
         ]
 
+        # Merge column counts into final stats
+        final_stats = final_stats.merge(column_counts.set_index(groups),
+                                    left_index=True, right_index=True)
+
+        # Reorder columns with column_count first
+        column_order = ['column_count', 'pct_mean', 'pct_median',
+                    'pct_min', 'pct_max', 'pct_std', 'total_importance_sum', 'importance_mean']
+        final_stats = final_stats[column_order]
+
         # Sort by mean percentage importance
         final_stats = final_stats.sort_values('pct_mean', ascending=False)
 
@@ -211,33 +232,57 @@ class EvaluationOrchestrator:
         return final_stats
 
 
-    # Keep the old method for backward compatibility, but deprecate it
     @u.timing_decorator
-    def analyze_all_feature_importances(
-        self,
-        feature_categories_filter: list = None,
-        feature_names_filter: list = None,
-        groups: list = None
-    ) -> pd.DataFrame:
+    def build_all_epoch_shift_evaluators(self) -> dict[int, object]:
         """
-        DEPRECATED: Use generate_all_feature_importances() + filter_and_aggregate_importances() instead.
-        """
-        logger.warning("analyze_all_feature_importances() is deprecated. Use generate + filter pattern for better performance.")
-        complete_df = self.generate_all_feature_importances()
-        return self.filter_and_aggregate_importances(
-            feature_categories_filter, feature_names_filter, groups, complete_df
-        )
-    def extract_single_model_importances(self, model_uri: str) -> pd.DataFrame:
-        """
-        Extract feature importances from a single model URI.
-
-        Params:
-        - model_uri (str): S3 URI of the trained model
+        Build a model evaluator for each configured epoch shift using concatenated
+        test/val data and return them in a dict keyed by epoch_shift.
 
         Returns:
-        - DataFrame: Feature importances with proper column names
+        - dict: {epoch_shift: evaluator} - raises immediately if any evaluator fails to build
         """
-        return self._extract_feature_importances(model_uri)
+        epoch_shifts = self.wallets_config['training_data'].get('epoch_shifts', [])
+        if not epoch_shifts:
+            raise ConfigError("No epoch_shifts configured in wallets_config")
+
+        n_threads = self.wallets_config['n_threads']['evaluate_all_models']
+        logger.milestone(
+            f"Building evaluators for {len(epoch_shifts)} epoch shifts using {n_threads} threads..."
+        )
+
+        # Load shared data once - identical across all epoch shifts
+        logger.info("Loading shared target and feature data...")
+        y_test = sime.load_concatenated_y('test', self.wallets_config, self.modeling_config)
+        y_val = sime.load_concatenated_y('val', self.wallets_config, self.modeling_config)
+        y_train, X_train = load_concatenated_features(self.wallets_config)
+        logger.info("Target and feature data loaded successfully.")
+
+        target_var = self.modeling_config['target']['target_var']
+        y_test.columns = [target_var]
+        y_val.columns = [target_var]
+
+        evaluators_by_shift: dict[int, object] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+            future_to_shift = {
+                executor.submit(
+                    self._build_evaluator_for_shift,
+                    shift,
+                    y_test,
+                    y_val,
+                    y_train,
+                    X_train
+                ): shift
+                for shift in epoch_shifts
+            }
+
+            for future in concurrent.futures.as_completed(future_to_shift):
+                shift = future_to_shift[future]
+                evaluator = future.result()  # This will raise any exception from the worker
+                evaluators_by_shift[shift] = evaluator
+                logger.milestone(f"✓ Built evaluator for epoch_shift={shift}")
+
+        return dict(sorted(evaluators_by_shift.items()))
 
 
     # ------------------------
@@ -247,7 +292,7 @@ class EvaluationOrchestrator:
     def _extract_and_analyze_single_importance(self, epoch_shift: int) -> dict:
         """Extract and analyze importances for a single epoch shift model."""
         # Load model info
-        modeler = WalletModeler(
+        modeler = wm.WalletModeler(
             wallets_config=self.wallets_config,
             modeling_config=self.modeling_config,
             date_suffix=f"sh{epoch_shift}",
@@ -344,10 +389,11 @@ class EvaluationOrchestrator:
 
     def _extract_feature_importances(self, model_uri: str) -> pd.DataFrame:
         """
-        Extract feature importances from SageMaker model URI.
+        Extract feature importances from SageMaker model URI, applying the same feature
+        selection that was used during training to ensure accurate mapping.
 
         Returns:
-        - DataFrame: Features and their importance scores, sorted by importance
+        - DataFrame: Features and their importance scores for selected features only
         """
         logger.debug(f"Extracting feature importances from: {model_uri}")
 
@@ -371,27 +417,61 @@ class EvaluationOrchestrator:
             booster = xgb.Booster()
             booster.load_model(str(model_files[0]))
 
-            # Extract importances
+            # Extract importances from XGBoost model
             importance_dict = booster.get_score(importance_type='gain')
 
-            # Load metadata to map feature indices to names
-            metadata = self._load_concatenated_metadata()
-            feature_names = metadata['feature_columns'][1:]  # Skip offset_date column
+            # Load model config to get feature selection rules
+            model_config = wm.load_model_config(model_uri)
 
-            # Build importance DataFrame with proper feature names
+            # Get full feature list and apply same selection as training
+            metadata = self._load_concatenated_metadata()
+            full_features = metadata['feature_columns'][1:]  # Skip offset_date column
+
+            # Apply feature selection using same logic as training
+            drop_patterns = model_config['training'].get('drop_patterns', [])
+            protected_columns = model_config['training'].get('protected_columns', [])
+
+            if drop_patterns:
+                columns_to_drop = ct.identify_matching_columns(drop_patterns, full_features, protected_columns)
+                selected_features = [col for col in full_features if col not in columns_to_drop]
+            else:
+                selected_features = full_features
+
+            # Validate XGBoost features - assuming 1-based indexing (f1 to fn)
+            expected_max_index = len(selected_features)  # e.g., 188 for 188 features (f1 to f188)
+            xgb_feature_keys = set(importance_dict.keys())
+
+            # Check for unexpected features beyond our expected range
+            unexpected_keys = []
+            for key in xgb_feature_keys:
+                if key.startswith('f'):
+                    index = int(key[1:])
+                    if index > expected_max_index:
+                        unexpected_keys.append(key)
+
+            if unexpected_keys:
+                raise ValueError(
+                    f"XGBoost model contains unexpected feature keys: {unexpected_keys}. "
+                    f"Expected features f1 to f{expected_max_index} based on "
+                    f"{len(selected_features)} selected features after applying drop patterns."
+                )
+
+            # Build importance DataFrame - use 1-based XGBoost indexing
             importance_data = []
-            for i, feat_name in enumerate(feature_names):
-                xgb_feat_key = f'f{i}'  # XGBoost uses f0, f1, f2...
-                if xgb_feat_key in importance_dict:
-                    importance_data.append({
-                        'feature': feat_name,
-                        'importance': importance_dict[xgb_feat_key],
-                        'feature_index': i
-                    })
+            for i, feat_name in enumerate(selected_features):
+                xgb_feat_key = f'f{i + 1}'  # XGBoost uses 1-based indexing
+                importance_value = importance_dict.get(xgb_feat_key, 0.0)  # Default to 0 for zero-importance features
+                importance_data.append({
+                    'feature': feat_name,
+                    'importance': importance_value,
+                    'feature_index': i
+                })
 
             importances_df = pd.DataFrame(importance_data).sort_values('importance', ascending=False)
 
-            logger.info(f"Extracted {len(importances_df)} feature importances for model")
+            logger.info(f"Extracted {len(importances_df)} feature importances for selected features only "
+                    f"({len([x for x in importance_data if x['importance'] > 0])} non-zero)")
+
             return importances_df
 
 
@@ -407,3 +487,84 @@ class EvaluationOrchestrator:
                 self._metadata_cache['concatenated'] = json.load(f)
 
         return self._metadata_cache['concatenated']
+
+
+    def _build_evaluator_for_shift(
+            self,
+            epoch_shift: int,
+            y_test: pd.DataFrame,
+            y_val: pd.DataFrame,
+            y_train: pd.Series,
+            X_train: pd.DataFrame
+        ):
+        """
+        Build a single evaluator for the provided epoch shift.
+        Uses pre-loaded data passed from orchestrator.
+        """
+        date_suffix = f"sh{epoch_shift}"
+
+        # Initialize a modeler to get model info
+        modeler = wm.WalletModeler(
+            wallets_config=self.wallets_config,
+            modeling_config=self.modeling_config,
+            date_suffix=date_suffix,
+            s3_uris=None,
+            override_approvals=True
+        )
+
+        # Load model info (raises if not found)
+        model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
+
+        # Load epoch-specific predictions
+        y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
+        y_val_pred = sime.load_bt_sagemaker_predictions('val', self.wallets_config, date_suffix)
+
+        # Build the evaluator using the shared helper (pass pre-loaded features)
+        evaluator = sime.create_concatenated_sagemaker_evaluator(
+            self.wallets_config,
+            self.modeling_config,
+            model_info['model_uri'],
+            y_test_pred,
+            y_test,
+            y_val_pred,
+            y_val,
+            epoch_shift,
+            y_train,
+            X_train
+        )
+
+        return evaluator
+
+
+
+# Helper to load concatenated train/test features and y_train, and rename columns
+def load_concatenated_features(
+    wallets_config: Dict
+) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
+    """
+    Load concatenated train/test CSVs, extract y_train, ensure feature count matches,
+    and rename feature columns for X_train.
+
+    Returns:
+    - y_train (Series)
+    - X_train (DataFrame)
+    """
+    base_dir = Path(wallets_config['training_data']['local_s3_root'])
+    concat_dir = base_dir / 's3_uploads' / 'wallet_training_data_concatenated'
+    local_dir = wallets_config['training_data']['local_directory']
+    data_path = concat_dir / local_dir
+    train_path = data_path / 'train.csv.gz'
+
+    X_train = pd.read_csv(train_path, header=None, compression='infer')
+
+    # First column is always y_train
+    y_train = X_train.iloc[:, 0]
+
+    # Validate feature dimensions
+    expected_n = X_train.shape[1]
+
+    # Rename feature columns
+    feature_names = [f"feature_{i}" for i in range(expected_n)]
+    X_train.columns = feature_names
+
+    return y_train, X_train

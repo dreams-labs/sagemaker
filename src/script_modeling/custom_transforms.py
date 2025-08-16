@@ -1,5 +1,8 @@
 import copy
 import argparse
+import fnmatch
+from typing import List, Set
+import json
 import pandas as pd
 import numpy as np
 import xgboost as xgb
@@ -39,6 +42,10 @@ def preprocess_custom_labels(df: pd.DataFrame, config: dict) -> np.ndarray:
 # ------------------------------------------------------------------------ #
 #                             X Transformations                            #
 # ------------------------------------------------------------------------ #
+
+
+# Offset Filters
+# --------------
 
 def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
     """
@@ -116,13 +123,15 @@ def select_shifted_offsets(
     df_x_filtered = df_x_full[mask].reset_index(drop=True)
     df_y_filtered = df_y_full[mask].reset_index(drop=True)
 
-    # Drop the offset_date column from X features
-    df_x_filtered = df_x_filtered.iloc[:, 1:]
-
     return df_x_filtered, df_y_filtered
 
 
-def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
+
+
+# Row Filters
+# -----------
+
+def apply_cli_row_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
     """
     Apply CLI hyperparameter overrides to custom feature filter configuration.
 
@@ -166,20 +175,24 @@ def apply_cli_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
     return config_copy
 
 
-def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dict) -> tuple[pd.DataFrame, np.ndarray]:
+def apply_row_filters(
+    df_x: pd.DataFrame,
+    feature_columns: List[str],
+    modeling_config: dict
+) -> tuple[pd.DataFrame, np.ndarray]:
     """
     Apply custom row-level filters to feature DataFrame based on config rules.
 
     Params:
-    - df_x (DataFrame): Raw feature data without headers
-    - metadata (dict): Contains feature_columns list for column name mapping
-    - config (dict): modeling_config with preprocessing X filter definitions
+    - df_x (DataFrame): Feature data without headers
+    - feature_columns (List[str]): List of feature column names corresponding to df_x columns
+    - modeling_config (dict): modeling_config with preprocessing X filter definitions
 
     Returns:
     - tuple: (filtered_df, row_mask) where row_mask indicates kept rows for Y alignment
     """
     # Get filter definitions
-    custom_filters = config['training']['custom_filters']
+    custom_filters = modeling_config['training']['custom_filters']
 
     # Early escape if no filters configured
     if not custom_filters:  # Handles None, {}, and other falsy values
@@ -187,15 +200,12 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
         # Return all rows (no filtering applied)
         return df_x, np.ones(len(df_x), dtype=bool)
 
-    # Select feature columns excluding 'offset_days'
-    feature_columns = metadata['feature_columns'][1:]
-
     # Validate feature list length matches X df
     if len(feature_columns) != df_x.shape[1]:
-        raise ValueError(f"Feature column count mismatch: metadata has {len(feature_columns)} "
+        raise ValueError(f"Feature column count mismatch: feature_columns has {len(feature_columns)} "
                         f"columns, DataFrame has {df_x.shape[1]} columns")
 
-    # Assign column names from metadata
+    # Temporarily assign column names for filtering
     df_x_named = df_x.copy()
     df_x_named.columns = feature_columns
 
@@ -208,9 +218,8 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
     if missing_columns:
         raise ValueError(f"Filter columns not found in features: {missing_columns}")
 
-    # Initialize filter mask for this column (start with all True)
+    # Initialize filter mask (start with all True)
     combined_mask = np.ones(len(df_x_named), dtype=bool)
-    filter_mask = np.ones(len(df_x_named), dtype=bool)
     initial_row_count = len(df_x_named)
 
     print(f"Starting with {initial_row_count:,} rows before custom filtering")
@@ -232,7 +241,7 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
         if 'min' in filter_rules:
             min_val = filter_rules['min']
             min_mask = col_data >= min_val
-            filter_mask &= min_mask
+            combined_mask &= min_mask
             rows_removed_min = (~min_mask).sum()
             print(f"Filter '{filter_col}' min {min_val}: removed {rows_removed_min:,} rows")
 
@@ -240,36 +249,154 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
         if 'max' in filter_rules:
             max_val = filter_rules['max']
             max_mask = col_data <= max_val
-            filter_mask &= max_mask
+            combined_mask &= max_mask
             rows_removed_max = (~max_mask).sum()
             print(f"Filter '{filter_col}' max {max_val}: removed {rows_removed_max:,} rows")
-
-        # Combine with overall mask
-        rows_before = combined_mask.sum()
-        combined_mask &= filter_mask
-        rows_after = combined_mask.sum()
-        rows_removed_this_filter = rows_before - rows_after
-
-        print(f"Filter '{filter_col}' total impact: removed {rows_removed_this_filter:,} rows "
-              f"({rows_after:,} remaining)")
 
     # Final validation
     final_row_count = combined_mask.sum()
     total_removed = initial_row_count - final_row_count
     removal_pct = (total_removed / initial_row_count) * 100
 
-    print(f"Custom filtering complete: {total_removed:,} rows removed ({removal_pct:.1f}%), "
+    print(f"Row filtering complete: {total_removed:,} rows removed ({removal_pct:.1f}%), "
           f"{final_row_count:,} rows remaining")
 
     if final_row_count == 0:
         raise ValueError("All rows filtered out by custom filters - filters may be too restrictive")
 
-    # Apply mask and return
-    filtered_df = df_x_named[combined_mask].reset_index(drop=True)
+    # Apply mask and return headerless DataFrame
+    filtered_df = df_x[combined_mask].reset_index(drop=True)
 
     return filtered_df, combined_mask
 
 
+# Column Filters
+# --------------
+
+def identify_matching_columns(
+    column_patterns: List[str],
+    all_columns: List[str],
+    protected_columns: List[str] = None
+) -> Set[str]:
+    """
+    Match columns that contain all non-wildcard parts of patterns, preserving sequence and structure.
+
+    Params:
+    - column_patterns: List of patterns with * wildcards.
+    - all_columns: List of actual column names.
+    - protected_columns: List of columns to exclude from results.
+
+    Returns:
+    - matched_columns: Set of columns matching any pattern, minus protected columns.
+    """
+    matched = set()
+    for pattern in column_patterns:
+        for column in all_columns:
+            # Match using fnmatch to preserve structure and sequence
+            if fnmatch.fnmatch(column, pattern):
+                matched.add(column)
+
+    if protected_columns:
+        matched = matched - set(protected_columns)
+
+    return matched
+
+
+def apply_column_filters(
+    df_x: pd.DataFrame,
+    feature_columns: List[str],
+    modeling_config: dict
+) -> tuple[pd.DataFrame, List[str]]:
+    """
+    Apply pattern-based column dropping to feature DataFrame.
+
+    Params:
+    - df_x (DataFrame): Raw feature data without headers
+    - feature_columns (List[str]): List of feature column names
+    - modeling_config (dict): modeling_config with feature_selection patterns
+
+    Returns:
+    - tuple: (filtered_df, selected_columns) where filtered_df has no headers and selected_columns lists kept columns
+    """
+    # Get pattern definitions
+    drop_patterns = modeling_config['training'].get('drop_patterns', [])
+    protected_columns = modeling_config['training'].get('protected_columns', [])
+
+    if not drop_patterns:
+        print("No drop patterns configured, returning unfiltered data")
+        return df_x, feature_columns
+
+    # Validate feature list length matches X df
+    if len(feature_columns) != df_x.shape[1]:
+        raise ValueError(f"Feature column count mismatch: feature_columns has {len(feature_columns)} "
+                        f"columns, DataFrame has {df_x.shape[1]} columns")
+
+    # Temporarily assign column names for pattern matching
+    df_x_named = df_x.copy()
+    df_x_named.columns = feature_columns
+
+    # Identify columns to drop
+    columns_to_drop = identify_matching_columns(
+        drop_patterns,
+        feature_columns,
+        protected_columns
+    )
+
+    # Get selected columns (those not dropped)
+    selected_columns = [col for col in feature_columns if col not in columns_to_drop]
+
+    print(f"Pattern selection: {len(selected_columns)}/{len(feature_columns)} columns kept")
+
+    # Filter to selected columns and remove headers
+    filtered_df = df_x_named[selected_columns].copy()
+    filtered_df.columns = range(len(selected_columns))  # Reset to numeric headers
+
+    if len(selected_columns) == 0:
+        raise ValueError("All columns removed by pattern-based feature selection")
+
+    return filtered_df, selected_columns
+
+
+
+def apply_cli_col_filter_overrides(config: dict, args: argparse.Namespace) -> dict:
+    """
+    Apply CLI hyperparameter overrides to pattern-based feature selection configuration.
+
+    Params:
+    - config (dict): Original modeling configuration
+    - args (Namespace): Parsed hyperparameters from SageMaker
+
+    Returns:
+    - dict: Config with pattern selection values overridden by hyperparameters
+    """
+    config_copy = copy.deepcopy(config)
+
+    overrides_applied = []
+
+    # Check for drop_patterns override
+    if hasattr(args, 'drop_patterns'):
+        drop_patterns_json = getattr(args, 'drop_patterns')
+        try:
+            drop_patterns = json.loads(drop_patterns_json)
+            config_copy['training']['drop_patterns'] = drop_patterns
+            overrides_applied.append(f"drop_patterns={len(drop_patterns)} patterns")
+        except json.JSONDecodeError as e:
+            print(f"WARNING: Invalid JSON for drop_patterns: {e}")
+
+    # Check for protected_columns override
+    if hasattr(args, 'protected_columns'):
+        protected_columns_json = getattr(args, 'protected_columns')
+        try:
+            protected_columns = json.loads(protected_columns_json)
+            config_copy['training']['protected_columns'] = protected_columns
+            overrides_applied.append(f"protected_columns={len(protected_columns)} columns")
+        except json.JSONDecodeError as e:
+            print(f"WARNING: Invalid JSON for protected_columns: {e}")
+
+    if overrides_applied:
+        print(f"Applied CLI pattern overrides: {', '.join(overrides_applied)}")
+
+    return config_copy
 
 
 # ------------------------------------------------------------------------ #
@@ -277,11 +404,11 @@ def apply_custom_feature_filters(df_x: pd.DataFrame, metadata: dict, config: dic
 # ------------------------------------------------------------------------ #
 
 def build_custom_dmatrix(
-        df_x: pd.DataFrame,
-        df_y: pd.Series,
-        config: dict,
-        metadata: dict
-    ) -> xgb.DMatrix:
+    df_x: pd.DataFrame,
+    df_y: pd.Series,
+    config: dict,
+    metadata: dict
+) -> xgb.DMatrix:
     """
     Build XGBoost DMatrix from raw features and labels, applying custom transformations.
 
@@ -302,16 +429,26 @@ def build_custom_dmatrix(
     if df_x.isnull().values.any():
         raise ValueError("NaNs detected in feature DataFrame")
 
-    # Apply custom X filtering if enabled
-    df_x_final, row_mask = apply_custom_feature_filters(df_x, metadata, config)
+    # Get all feature columns (including offset_date)
+    feature_columns = metadata['feature_columns']
+
+    # Step 1: Apply row-level filtering FIRST (while all columns still exist)
+    df_x_rows_filtered, row_mask = apply_row_filters(
+        df_x, feature_columns, config
+    )
+
+    # Step 2: Apply pattern-based column selection AFTER filtering
+    df_x_final, _ = apply_column_filters(
+        df_x_rows_filtered, feature_columns, config
+    )
+
+    # Step 3: Apply row mask to y data
     df_y_final = df_y[row_mask].reset_index(drop=True)
 
-    # Apply y transformation
+    # Step 4: Apply y transformation
     labels = preprocess_custom_labels(df_y_final, config)
 
-    # Ensure labels array is not empty
-    if labels.shape[0] == 0:
-        raise ValueError("Processed label array is empty")
+    print(f"Final DMatrix: {df_x_final.shape[0]} rows × {df_x_final.shape[1]} features")
 
     # Ensure features and labels have matching lengths
     if df_x_final.shape[0] != labels.shape[0]:
