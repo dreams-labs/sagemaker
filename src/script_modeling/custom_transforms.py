@@ -276,7 +276,7 @@ def apply_row_filters(
 def identify_matching_columns(
     column_patterns: List[str],
     all_columns: List[str],
-    protected_columns: List[str] = None
+    protected_patterns: List[str] = None
 ) -> Set[str]:
     """
     Match columns that contain all non-wildcard parts of patterns, preserving sequence and structure.
@@ -284,7 +284,7 @@ def identify_matching_columns(
     Params:
     - column_patterns: List of patterns with * wildcards.
     - all_columns: List of actual column names.
-    - protected_columns: List of columns to exclude from results.
+    - protected_patterns: List of patterns to exclude from results (uses fnmatch).
 
     Returns:
     - matched_columns: Set of columns matching any pattern, minus protected columns.
@@ -292,12 +292,16 @@ def identify_matching_columns(
     matched = set()
     for pattern in column_patterns:
         for column in all_columns:
-            # Match using fnmatch to preserve structure and sequence
             if fnmatch.fnmatch(column, pattern):
                 matched.add(column)
 
-    if protected_columns:
-        matched = matched - set(protected_columns)
+    if protected_patterns:
+        protected = set()
+        for pattern in protected_patterns:
+            for column in all_columns:
+                if fnmatch.fnmatch(column, pattern):
+                    protected.add(column)
+        matched = matched - protected
 
     return matched
 
