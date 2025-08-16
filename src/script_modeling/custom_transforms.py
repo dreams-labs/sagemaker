@@ -81,7 +81,6 @@ def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
 
 def select_shifted_offsets(
     df_x_full: pd.DataFrame,
-    df_y_full: pd.DataFrame,
     wallets_config: dict,
     epoch_shift: int,
     split: str
@@ -117,13 +116,12 @@ def select_shifted_offsets(
     print(f"Target offset_days after {epoch_shift} shift: {target_offset_days}")
 
     # Create mask for rows with target offset_date values
-    mask = offset_dates.isin(target_offset_days)
+    offset_mask = offset_dates.isin(target_offset_days)
 
     # Apply identical filtering to both X and Y
-    df_x_filtered = df_x_full[mask].reset_index(drop=True)
-    df_y_filtered = df_y_full[mask].reset_index(drop=True)
+    df_x_filtered = df_x_full[offset_mask].reset_index(drop=True)
 
-    return df_x_filtered, df_y_filtered
+    return df_x_filtered, offset_mask
 
 
 
