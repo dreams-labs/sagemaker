@@ -46,7 +46,7 @@ training:
     custom_filters:
         cw_balance|total_usd_balance|w1:
             cli: cw_balance
-            min: 100
+            min: 1000
         # trading|total_volume|w1:
         #     cli: total_volume
         #     min: 500
@@ -69,31 +69,39 @@ training:
         # balance|total_usd_balance|w1:
 
     drop_patterns: [
-        macro|*,
-        offset_days,
+        # macro|btc_vdd_multiple_last/*',
+        # macro|global_market_cap_rsi_30_last/*',
+        # macro|btc_mvrv_z_score_last/*',
+        macro|btc_vdd_multiple_std/*',
+        macro|btc_mvrv_z_score_std/*',
+        macro|global_market_cap_std/*',
+        # macro|gtrends_memecoin_us_std/*',
+        macro|btc_price_std/*',
+        # offset_days,
         balance|*,
         cw_balance|*,
         cluster|*,
-        cw_cluster|*,
+        # cw_cluster|*,
         mktcap|*,
-        performance|*,
-        cw_timing|volume_sma_2/*,
-        scenario|*/w1,
-        scenario|*/w2,
-        scenario|*/w3,
-        scenario|*/w4,
-        trading|*,
+        # performance|*,
+        # cw_timing|volume_sma_2/*,
+        # scenario|*/w1,
+        # scenario|*/w2,
+        # scenario|*/w3,
+        # scenario|*/w4,
+        # trading|*,
         '*transfers|first_buy/*',
+        '*transfers|earlybird_ratio/*',
         cw_transfers|initial_hold_time,
-        transfers|later_buyers/*,
+        # transfers|later_buyers/*,
     ]
-    protected_columns: [
-        macro|global_market_cap_rsi_30_last|w1,
-        macro|global_market_cap_rsi_30_last|w2,
-        macro|global_market_cap_rsi_30_last|w3,
-        macro|global_market_cap_rsi_30_last|w4,
-        macro|btc_mvrv_z_score_last|all_windows,
-    ]
+    # # protected_columns: [
+    # #     macro|global_market_cap_rsi_30_last|w1,
+    # #     macro|global_market_cap_rsi_30_last|w2,
+    # #     macro|global_market_cap_rsi_30_last|w3,
+    # #     macro|global_market_cap_rsi_30_last|w4,
+    # #     macro|btc_mvrv_z_score_last|all_windows,
+    # # ]
 
 
 
