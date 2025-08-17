@@ -223,22 +223,32 @@ def _process_concatenated_split(
     # Sanity checks
     if len(X_full) != len(y_df):
         raise ValueError(f"{split}: features rows ({len(X_full)}) must match y rows ({len(y_df)})")
-    if len(X_full) != len(y_pred):
-        raise ValueError(f"{split}: features rows ({len(X_full)}) must match y_pred rows ({len(y_pred)})")
 
     # 1) Epoch-offset filtering
-    X_epoch, y_epoch = select_shifted_offsets(
-        X_full, y_df, wallets_config, epoch_shift, split
+    X_epoch, offset_mask = select_shifted_offsets(
+        X_full, wallets_config, epoch_shift, split
     )
+    y_epoch = y_df[offset_mask].reset_index(drop=True)
 
     # Build epoch mask directly from configured target_offset_days after shift
     # (do NOT derive from X_epoch, which no longer contains the offset column).
     target_offset_days = identify_offset_ints(wallets_config, shift=epoch_shift)[f'{split}_offsets']
     epoch_mask_full = X_full.iloc[:, 0].isin(target_offset_days).to_numpy()
 
-    # Apply the epoch mask to predictions
-    y_pred_epoch = y_pred[epoch_mask_full].reset_index(drop=True)
-
+    # Check prediction alignment and apply epoch filtering if needed
+    if len(y_pred) == len(X_epoch):
+        # Predictions already filtered to match epoch-filtered data
+        y_pred_epoch = y_pred.reset_index(drop=True)
+    elif len(y_pred) == len(X_full):
+        # Predictions match full dataset, apply epoch filtering
+        y_pred_epoch = y_pred[epoch_mask_full].reset_index(drop=True)
+    else:
+        raise ValueError(
+            f"{split}: prediction length ({len(y_pred)}) must match either "
+            f"full dataset ({len(X_full)}) or epoch-filtered dataset ({len(X_epoch)}) "
+            f"rows. This suggests predictions were generated with different filtering "
+            f"than expected for epoch_shift={epoch_shift}."
+        )
     # Sanity: the mask rows should match rows kept by select_shifted_offsets
     if int(epoch_mask_full.sum()) != len(X_epoch):
         logger.warning(
