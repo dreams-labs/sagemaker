@@ -6,6 +6,7 @@ import logging
 import copy
 import traceback
 import time
+from datetime import datetime, timedelta
 from typing import List
 from pathlib import Path
 import concurrent.futures
@@ -92,6 +93,12 @@ class WalletWorkflowOrchestrator:
         eval_offsets = split_requirements['all_eval_offsets']
         test_offsets = split_requirements['all_test_offsets']
         val_offsets = split_requirements['all_val_offsets']
+
+        # Shift val_offsets by modeling_period_duration, which is needed because the
+        #  validation data reflects the period after the training data, while the files
+        #  are named based on their training data timing.
+        period_dur = self.wallets_config['training_data']['modeling_period_duration']
+        val_offsets = shift_val_offsets(val_offsets, period_dur)
 
         # Combine all offsets and remove duplicates while preserving order
         all_offsets = train_offsets + eval_offsets + test_offsets + val_offsets
@@ -197,11 +204,16 @@ class WalletWorkflowOrchestrator:
         # Determine offsets for each split from config
         split_requirements = calculate_comprehensive_offsets_by_split(self.wallets_config)
 
+        # Shift val offsets so the filenames match the month requirements
+        val_offsets_shifted = shift_val_offsets(
+            split_requirements['all_val_offsets'],
+            self.wallets_config['training_data']['modeling_period_duration']
+        )
         offsets_map = {
             'train': split_requirements['all_train_offsets'],
             'eval':  split_requirements['all_eval_offsets'],
             'test':  split_requirements['all_test_offsets'],
-            'val':   split_requirements['all_val_offsets']
+            'val':   val_offsets_shifted
         }
         # Preflight: ensure no NaNs and consistent column counts across all date_suffixes per split
         for split, offsets in offsets_map.items():
@@ -1119,7 +1131,8 @@ class WalletWorkflowOrchestrator:
             modeling_config=self.modeling_config,
             date_suffix=f'sh{epoch_shift}',
             s3_uris=shift_s3_uris,
-            override_approvals=True  # Skip confirmations in parallel execution
+            override_approvals=True,
+            epoch_shift=epoch_shift,
         )
 
         # Load the model for this epoch_shift
@@ -1240,6 +1253,32 @@ def calculate_comprehensive_offsets_by_split(wallets_config: dict) -> dict[str, 
         result[f'all_{split_name}'] = sorted(list(split_dates))
 
     return result
+
+
+def shift_val_offsets(val_offsets: list, period_dur: int) -> list:
+    """
+    Shifts val_offsets by modeling_period_duration, which is needed because the
+     validation data reflects the period after the training data, while the files
+     are named based on their training data timing.
+
+    Params:
+    - val_offsets (list): List of date strings in YYMMDD format
+    - period_dur (int): Number of days to subtract from each date
+
+    Returns:
+    - shifted_offsets (list): List of shifted date strings in YYMMDD format
+    """
+    shifted_offsets = []
+    for offset_str in val_offsets:
+        # Convert YYMMDD to datetime
+        date_obj = datetime.strptime(offset_str, '%y%m%d')
+        # Subtract period duration
+        shifted_date = date_obj - timedelta(days=period_dur)
+        # Convert back to YYMMDD format
+        shifted_str = shifted_date.strftime('%y%m%d')
+        shifted_offsets.append(shifted_str)
+
+    return shifted_offsets
 
 
 def convert_offset_ints_to_dates(offset_days: list[int], wallets_config: dict) -> list[str]:

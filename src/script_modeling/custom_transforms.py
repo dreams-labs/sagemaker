@@ -90,7 +90,6 @@ def select_shifted_offsets(
 
     Params:
     - df_x_full (DataFrame): Full feature data with offset_date as first column
-    - df_y_full (DataFrame): Full target data (same row count as df_x_full)
     - wallets_config (dict): Contains base offset definitions and date_0
     - epoch_shift (int): Days to shift all base offsets (e.g., 0, 30, 60, 90)
     - split (str): 'train' or 'eval'
@@ -102,18 +101,29 @@ def select_shifted_offsets(
     - Extract offset_date column from df_x_full
     - Get base train_offsets from wallets_config
     - Apply epoch_shift to get target offset_days
+    - Validate all target offsets exist in data
     - Filter both DataFrames to only include rows with matching offset_date values
     - Drop offset_date column from filtered X data
     """
     # Extract offset_date column (first column of df_x_full)
     offset_dates = df_x_full.iloc[:, 0]
+    available_offsets = set(offset_dates.unique())
 
     # Get shifted target offsets
-    base_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
-    target_offset_days = base_offsets[f'{split}_offsets']  # Use train offsets for filtering
+    shifted_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
+    target_offset_days = shifted_offsets[f'{split}_offsets']
 
-    print(f"Unique offset_date values in data: {sorted(offset_dates.unique())}")
+    print(f"Unique offset_date values in data: {sorted(available_offsets)}")
     print(f"Target offset_days after {epoch_shift} shift: {target_offset_days}")
+
+    # Validate all target offsets exist in data
+    missing_offsets = set(target_offset_days) - available_offsets
+    if missing_offsets:
+        raise ValueError(
+            f"Missing offset_date values in {split} data: {sorted(missing_offsets)}. "
+            f"Available: {sorted(available_offsets)}, "
+            f"Required: {sorted(target_offset_days)}"
+        )
 
     # Create mask for rows with target offset_date values
     offset_mask = offset_dates.isin(target_offset_days)
