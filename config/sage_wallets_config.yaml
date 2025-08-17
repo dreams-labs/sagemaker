@@ -2,10 +2,10 @@
 
 training_data: #SageMaker
     local_s3_root: ../  # where s3_uploads and s3_downloads exist
-    training_data_directory: dda_957_rebuild  # where to load local csvs from
-    local_directory: dda_956_importance_v3  # where to store local artifacts
-    upload_directory: dda-956-importan-v3  # new S3 folder name in bucket training_data_processed
-    download_directory: dda_956_importance_v3  # local directory where scores are stored
+    training_data_directory: dda_962_all_windows  # where to load local csvs from
+    local_directory: dda_962_evals  # where to store local artifacts
+    upload_directory: dda-962-evals  # new S3 folder name in bucket training_data_processed
+    download_directory: dda_962_evals  # local directory where scores are stored
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
@@ -27,6 +27,7 @@ training_data: #SageMaker
         360
     ]
     date_0: '200127' # the date that all offsets will be numbered relative to
+    modeling_period_duration: 30  # the time difference between offsets
 
     # Offsets #KeyParam
     train_offsets: [
@@ -66,23 +67,23 @@ training_data: #SageMaker
         # '221013',
         # '221112',
         # '221212',
-        # '230111',
+        '230111',
         '230210',
         '230312',
-        '230411',
-        # '230511',
-        '230610',
-        # '230710',
-        '230809',
-        # '230908',
-        '231008',
-        # '231107',
-        '231207',
-        # '240106',
-        '240205',
-        # '240306',
-        '240405',
-        # '240505',
+        # '230411',
+        '230511',
+        # '230610',
+        '230710',
+        # '230809',
+        '230908',
+        # '231008',
+        '231107',
+        # '231207',
+        '240106',
+        # '240205',
+        '240306',
+        # '240405',
+        '240505',
         # '240604',
         # '240704',
         # '240803',
@@ -96,9 +97,9 @@ training_data: #SageMaker
         # '250331',
         # '250430',
         # '250530',
+        # '250629',
     ]
     eval_offsets: [
-        '230312',
         '230411',
         '230511',
         '230610',
@@ -113,10 +114,8 @@ training_data: #SageMaker
         '240306',
         '240405',
         '240505',
-
     ]
     test_offsets: [
-        '230312',
         '230411',
         '230511',
         '230610',
@@ -133,7 +132,6 @@ training_data: #SageMaker
         '240505',
     ]
     val_offsets: [  # val data is 1 month later than these modeling_period_start dates
-        # '240505',
         '240604',
         '240704',
     ]

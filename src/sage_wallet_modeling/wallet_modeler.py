@@ -73,7 +73,8 @@ class WalletModeler:
             modeling_config: Dict,
             date_suffix: str,
             s3_uris: Dict[str, Dict[str, str]] = None,
-            override_approvals: Optional[bool] = None
+            override_approvals: Optional[bool] = None,
+            epoch_shift: Optional[int] = None
         ):
         # Configs
         ucv.validate_sage_wallets_config(wallets_config)
@@ -95,6 +96,9 @@ class WalletModeler:
         self.predictions_uri = None
         self.endpoint_name: Optional[str] = None
         self.predictor: Optional[sagemaker.predictor.Predictor] = None
+
+        # Epoch shift for filtering offsets
+        self.epoch_shift = epoch_shift
 
         # Misc
         self.override_approvals = override_approvals
@@ -370,7 +374,7 @@ class WalletModeler:
         This method bypasses SageMaker's 63-character input filter limit by applying
         feature selection locally before uploading to S3 for batch transform.
 
-        Flow: Local CSV → Local filtering → S3 upload → Batch transform → Download preds
+        Flow: Local CSV → Local row filtering → Local column filtering → S3 upload → Batch transform → Download preds
 
         Params:
         - dataset_type (str): Type of dataset to score ('val' or 'test')
@@ -392,28 +396,41 @@ class WalletModeler:
         logger.debug(f"Loading local {dataset_type} data...")
         df_raw = self._load_local_concatenated_data(dataset_type)
 
-        # Step 2: Load model config to get feature selection settings
+        # Step 2: Load model config to get filtering settings
         logger.debug("Loading model configuration...")
         model_config = load_model_config(self.model_uri)
 
-        # Step 3: Apply feature selection locally
-        logger.debug("Applying feature selection...")
-        df_filtered = self._apply_feature_selection_locally(df_raw, model_config)
+        # Step 3: Apply offset filters based on epoch shift
+        if self.epoch_shift is not None:
+            logger.debug("Applying offset filtering...")
+            df_rows_filtered, _ = ct.select_shifted_offsets(
+                df_raw,
+                self.wallets_config,
+                self.epoch_shift,
+                dataset_type
+            )
+            rows_removed = len(df_raw) - len(df_rows_filtered)
+            logger.info(f"Offset filtering: {rows_removed:,} rows removed, "
+                        f"{len(df_rows_filtered):,} rows remaining")
 
-        # Step 4: Remove column names for SageMaker compatibility
+        # Step 4: Apply column-level filtering AFTER row filtering
+        logger.debug("Applying column-level filtering...")
+        df_filtered = self._apply_feature_selection_locally(df_rows_filtered, model_config)
+
+        # Step 5: Remove column names for SageMaker compatibility
         df_sagemaker = df_filtered.copy()
         df_sagemaker.columns = range(len(df_sagemaker.columns))
 
-        # Step 5: Upload filtered data to temporary S3 location
-        logger.debug("Uploading filtered data to S3...")
+        # Step 6: Upload filtered data to temporary S3 location
+        logger.info("Uploading filtered data to S3...")
         temp_s3_uri = self._upload_temp_data_for_transform(df_sagemaker, dataset_type)
 
-        # Step 6: Setup model for batch transform
+        # Step 7: Setup model for batch transform
         model_name = self.model_uri.split('/')[-3]  # Extract model name from URI
         self._setup_model_for_batch_transform(model_name)
 
-        # Step 7: Execute batch transform with no input filter (data pre-filtered)
-        logger.debug("Executing batch transform...")
+        # Step 8: Execute batch transform with no input filter (data pre-filtered)
+        logger.info("Executing batch transform...")
         result = self._execute_batch_transform(
             dataset_uri=temp_s3_uri,
             model_name=model_name,
@@ -421,7 +438,7 @@ class WalletModeler:
             job_name_suffix=job_name_suffix
         )
 
-        # Step 8: Download predictions if requested
+        # Step 9: Download predictions if requested
         if download_preds:
             self._download_batch_transform_preds(result['predictions_uri'], dataset_type)
 
@@ -771,6 +788,7 @@ class WalletModeler:
         return df_filtered
 
 
+    @u.timing_decorator
     def _upload_temp_data_for_transform(self, df: pd.DataFrame, dataset_type: str) -> str:
         """
         Upload filtered DataFrame to temporary S3 location for batch transform.
@@ -798,7 +816,7 @@ class WalletModeler:
         s3_client = boto3.client('s3')
         try:
             s3_client.upload_file(tmp_path, bucket, temp_key)
-            logger.debug(f"Uploaded filtered data to: {temp_s3_uri}")
+            logger.info(f"Uploaded filtered data to: {temp_s3_uri}")
         finally:
             # Clean up temporary file
             os.unlink(tmp_path)
@@ -806,6 +824,7 @@ class WalletModeler:
         return temp_s3_uri
 
 
+    @u.timing_decorator
     def _execute_batch_transform(
             self,
             dataset_uri: str,
@@ -863,7 +882,7 @@ class WalletModeler:
         )
 
         # Execute batch transform
-        logger.info(f"Starting batch transform job: {job_name}")
+        logger.debug(f"Starting batch transform job: {job_name}")
         logger.debug(f"Using model: {model_name}")
         logger.debug(f"Input data: {dataset_uri}")
         logger.debug(f"Output path: {output_path}")

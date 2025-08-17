@@ -82,12 +82,23 @@ def load_data_matrices(
         epoch_shift = booster_params['epoch_shift']
         print(f"Applying epoch shift filtering: {epoch_shift} days")
 
-        df_train_x, df_train_y = ct.select_shifted_offsets(
-            df_train_x, df_train_y, wallets_config, epoch_shift, 'train'
+        df_train_x, offset_mask = ct.select_shifted_offsets(
+            df_train_x, wallets_config, epoch_shift, 'train'
         )
-        df_val_x, df_val_y = ct.select_shifted_offsets(
-            df_val_x, df_val_y, wallets_config, epoch_shift, 'eval'
+        if len(df_train_y) != len(offset_mask):
+            raise ValueError(
+                f"Length mismatch in train split: y={len(df_train_y)}, mask={len(offset_mask)}"
+            )
+        df_train_y = df_train_y[offset_mask].reset_index(drop=True)
+
+        df_val_x, offset_mask = ct.select_shifted_offsets(
+            df_val_x, wallets_config, epoch_shift, 'eval'
         )
+        if len(df_val_y) != len(offset_mask):
+            raise ValueError(
+                f"Length mismatch in eval split: y={len(df_val_y)}, mask={len(offset_mask)}"
+            )
+        df_val_y = df_val_y[offset_mask].reset_index(drop=True)
 
         print(f"After epoch shift filtering - Train: {len(df_train_x)} rows, Val: {len(df_val_x)} rows")
 

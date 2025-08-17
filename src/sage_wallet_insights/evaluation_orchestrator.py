@@ -515,6 +515,15 @@ class EvaluationOrchestrator:
         # Load model info (raises if not found)
         model_info = modeler.load_existing_model(epoch_shift=epoch_shift)
 
+        # Extract feature importances for this model
+        try:
+            importance_result = self._extract_and_analyze_single_importance(epoch_shift)
+            feature_importances_df = importance_result['analyzed_importances'][['feature','importance']]
+            logger.debug(f"Extracted feature importances for epoch_shift={epoch_shift}")
+        except Exception as e:
+            logger.warning(f"Could not extract feature importances for epoch_shift={epoch_shift}: {e}")
+            feature_importances_df = None
+
         # Load epoch-specific predictions
         y_test_pred = sime.load_bt_sagemaker_predictions('test', self.wallets_config, date_suffix)
         y_val_pred = sime.load_bt_sagemaker_predictions('val', self.wallets_config, date_suffix)
@@ -530,7 +539,8 @@ class EvaluationOrchestrator:
             y_val,
             epoch_shift,
             y_train,
-            X_train
+            X_train,
+            feature_importances_df=feature_importances_df
         )
 
         return evaluator

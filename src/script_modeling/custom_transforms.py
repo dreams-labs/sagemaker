@@ -81,7 +81,6 @@ def identify_offset_ints(wallets_config: dict, shift: int = 0) -> dict:
 
 def select_shifted_offsets(
     df_x_full: pd.DataFrame,
-    df_y_full: pd.DataFrame,
     wallets_config: dict,
     epoch_shift: int,
     split: str
@@ -91,7 +90,6 @@ def select_shifted_offsets(
 
     Params:
     - df_x_full (DataFrame): Full feature data with offset_date as first column
-    - df_y_full (DataFrame): Full target data (same row count as df_x_full)
     - wallets_config (dict): Contains base offset definitions and date_0
     - epoch_shift (int): Days to shift all base offsets (e.g., 0, 30, 60, 90)
     - split (str): 'train' or 'eval'
@@ -103,27 +101,37 @@ def select_shifted_offsets(
     - Extract offset_date column from df_x_full
     - Get base train_offsets from wallets_config
     - Apply epoch_shift to get target offset_days
+    - Validate all target offsets exist in data
     - Filter both DataFrames to only include rows with matching offset_date values
     - Drop offset_date column from filtered X data
     """
     # Extract offset_date column (first column of df_x_full)
     offset_dates = df_x_full.iloc[:, 0]
+    available_offsets = set(offset_dates.unique())
 
     # Get shifted target offsets
-    base_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
-    target_offset_days = base_offsets[f'{split}_offsets']  # Use train offsets for filtering
+    shifted_offsets = identify_offset_ints(wallets_config, shift=epoch_shift)
+    target_offset_days = shifted_offsets[f'{split}_offsets']
 
-    print(f"Unique offset_date values in data: {sorted(offset_dates.unique())}")
+    print(f"Unique offset_date values in data: {sorted(available_offsets)}")
     print(f"Target offset_days after {epoch_shift} shift: {target_offset_days}")
 
+    # Validate all target offsets exist in data
+    missing_offsets = set(target_offset_days) - available_offsets
+    if missing_offsets:
+        raise ValueError(
+            f"Missing offset_date values in {split} data: {sorted(missing_offsets)}. "
+            f"Available: {sorted(available_offsets)}, "
+            f"Required: {sorted(target_offset_days)}"
+        )
+
     # Create mask for rows with target offset_date values
-    mask = offset_dates.isin(target_offset_days)
+    offset_mask = offset_dates.isin(target_offset_days)
 
     # Apply identical filtering to both X and Y
-    df_x_filtered = df_x_full[mask].reset_index(drop=True)
-    df_y_filtered = df_y_full[mask].reset_index(drop=True)
+    df_x_filtered = df_x_full[offset_mask].reset_index(drop=True)
 
-    return df_x_filtered, df_y_filtered
+    return df_x_filtered, offset_mask
 
 
 
@@ -276,7 +284,7 @@ def apply_row_filters(
 def identify_matching_columns(
     column_patterns: List[str],
     all_columns: List[str],
-    protected_columns: List[str] = None
+    protected_patterns: List[str] = None
 ) -> Set[str]:
     """
     Match columns that contain all non-wildcard parts of patterns, preserving sequence and structure.
@@ -284,7 +292,7 @@ def identify_matching_columns(
     Params:
     - column_patterns: List of patterns with * wildcards.
     - all_columns: List of actual column names.
-    - protected_columns: List of columns to exclude from results.
+    - protected_patterns: List of patterns to exclude from results (uses fnmatch).
 
     Returns:
     - matched_columns: Set of columns matching any pattern, minus protected columns.
@@ -292,12 +300,16 @@ def identify_matching_columns(
     matched = set()
     for pattern in column_patterns:
         for column in all_columns:
-            # Match using fnmatch to preserve structure and sequence
             if fnmatch.fnmatch(column, pattern):
                 matched.add(column)
 
-    if protected_columns:
-        matched = matched - set(protected_columns)
+    if protected_patterns:
+        protected = set()
+        for pattern in protected_patterns:
+            for column in all_columns:
+                if fnmatch.fnmatch(column, pattern):
+                    protected.add(column)
+        matched = matched - protected
 
     return matched
 

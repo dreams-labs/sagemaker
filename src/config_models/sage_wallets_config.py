@@ -40,6 +40,7 @@ class TrainingDataConfig(BaseModel):
     download_directory: str = Field(...)
     dataset: str = Field(...)
     date_0: int = Field(...)
+    modeling_period_duration: int = Field(...)
     train_offsets: List[str] = Field(...)
     eval_offsets: List[str] = Field(...)
     test_offsets: List[str] = Field(...)
