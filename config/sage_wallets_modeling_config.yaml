@@ -46,7 +46,7 @@ training:
     custom_filters:
         cw_balance|total_usd_balance|w1:
             cli: cw_balance
-            min: 1000
+            min: 100
         # trading|total_volume|w1:
         #     cli: total_volume
         #     min: 500
@@ -61,29 +61,39 @@ training:
         cw_mktcap|end_portfolio_wtd_market_cap/market_cap_filled|w1:
             cli: cw_mkt_cap
             min: 5000000
+            # max: 5000000
             # max: 25000000
         # trading|crypto_inflows|all_windows:
         trading|unique_coins_traded|all_windows:
             min: 5
         # balance|total_usd_balance|w1:
 
-    # drop_patterns: [
-    #     offset_days,
-    #     balance|*,
-    #     cw_balance|*,
-    #     cluster|*,
-    #     mktcap|*,
-    #     performance|*/w2,
-    #     performance|*/w3,
-    #     performance|*/w4,
-    #     '*scenario|worst/*',
-    #     cw_timing|volume_sma_2/*,
-    #     trading|total_volume|w2,
-    #     trading|unique_coins_traded|all_windows,
-    #     trading|crypto_inflows|all_windows,
-    #     '*transfers|first_buy/*',
-    # ]
-    # protected_columns: []
+    drop_patterns: [
+        macro|*,
+        offset_days,
+        balance|*,
+        cw_balance|*,
+        cluster|*,
+        cw_cluster|*,
+        mktcap|*,
+        performance|*,
+        cw_timing|volume_sma_2/*,
+        scenario|*/w1,
+        scenario|*/w2,
+        scenario|*/w3,
+        scenario|*/w4,
+        trading|*,
+        '*transfers|first_buy/*',
+        cw_transfers|initial_hold_time,
+        transfers|later_buyers/*,
+    ]
+    protected_columns: [
+        macro|global_market_cap_rsi_30_last|w1,
+        macro|global_market_cap_rsi_30_last|w2,
+        macro|global_market_cap_rsi_30_last|w3,
+        macro|global_market_cap_rsi_30_last|w4,
+        macro|btc_mvrv_z_score_last|all_windows,
+    ]
 
 
 
@@ -104,8 +114,8 @@ training:
         scale_pos_weight: 3  # 1 to disable
 
         # feature selection
-        alpha: 5   # 0 to disable
-        lambda: 5  # 1 to disable
+        alpha: 1   # 0 to disable
+        lambda: 2  # 1 to disable
         gamma: 0.3
 
         # epoch shift
