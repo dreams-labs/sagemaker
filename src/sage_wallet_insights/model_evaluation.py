@@ -44,7 +44,8 @@ def create_concatenated_sagemaker_evaluator(
     y_val: pd.DataFrame = None,
     epoch_shift: int = 0,
     y_train: pd.Series = None,
-    X_train: pd.DataFrame = None
+    X_train: pd.DataFrame = None,
+    feature_importances_df: pd.DataFrame = None
 ) -> Union[wime.RegressorEvaluator, wime.ClassifierEvaluator]:
     """
     Create a SageMaker evaluator for concatenated model results with optional validation set.
@@ -60,6 +61,7 @@ def create_concatenated_sagemaker_evaluator(
     - epoch_shift (int, optional): How many days to shift the base offsets in wallets_config
     - y_train (Series, optional): Pre-loaded training target data
     - X_train (DataFrame, optional): Pre-loaded training feature data
+    - feature_importances_df (DataFrame, optional): df with columns 'feature','importance'
 
     Returns:
     - RegressorEvaluator or ClassifierEvaluator: Configured evaluator
@@ -174,7 +176,8 @@ def create_concatenated_sagemaker_evaluator(
         "y_validation": y_val_series,
         "validation_target_vars_df": validation_target_vars_df,
         "y_validation_pred": y_validation_pred,
-        "pipeline": create_mock_pipeline(model_type)
+        "pipeline": create_mock_pipeline(model_type),
+        "feature_importances": feature_importances_df
     }
 
     if model_type == "classification":
