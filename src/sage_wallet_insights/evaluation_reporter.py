@@ -260,7 +260,7 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
 
     # Generate colors for each epoch shift
     n_epochs = len(valid_evaluators)
-    colors = matplotlib.cm.viridis(np.linspace(0, 1, n_epochs))
+    colors = matplotlib.cm.viridis(np.linspace(0, 1, n_epochs))  #pylint:disable=no-member
 
     # Sort evaluators by epoch_shift for consistent ordering
     sorted_evaluators = dict(sorted(valid_evaluators.items()))
