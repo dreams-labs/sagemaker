@@ -735,6 +735,139 @@ class WalletWorkflowOrchestrator:
         return prediction_results
 
 
+    def export_scores_for_coin_model(self, score_name: str) -> str:
+        """
+        Aggregate wallet predictions across all epoch shifts and export in coin model format.
+
+        Automatically determines predictions directory from config, validates that each
+        wallet-epoch combination appears only once across all shifts, then consolidates
+        predictions with their wallet identifiers into a single DataFrame suitable for
+        coin model consumption.
+
+        Params:
+        - score_name (str): Name for the score column (e.g., 'performance_30d', 'momentum_score')
+
+        Returns:
+        - str: Path to exported parquet file
+
+        Raises:
+        - ValueError: If duplicate wallet-epoch combinations found across shifts
+        - FileNotFoundError: If required prediction or index files are missing
+        """
+        # Auto-generate predictions directory from config
+        predictions_dir = (Path(self.wallets_config['training_data']['local_s3_root']) /
+                        "s3_downloads" / "wallet_predictions" /
+                        self.wallets_config['training_data']['download_directory'])
+        predictions_path = Path(predictions_dir)
+
+        if not predictions_path.exists():
+            raise FileNotFoundError(f"Predictions directory not found: {predictions_path}")
+
+        logger.info(f"Exporting scores for coin model: {score_name}")
+        logger.info(f"Reading predictions from: {predictions_path}")
+
+        # Find all epoch shift directories (pattern: sh0, sh30, sh60, etc.)
+        shift_dirs = [d for d in predictions_path.iterdir()
+                    if d.is_dir() and d.name.startswith('sh')]
+
+        if not shift_dirs:
+            raise FileNotFoundError(f"No epoch shift directories found in {predictions_path}")
+
+        logger.info(f"Found {len(shift_dirs)} epoch shift directories: {[d.name for d in shift_dirs]}")
+
+        consolidated_data = []
+        splits_processed = set()
+
+        # Process each epoch shift directory
+        for shift_dir in sorted(shift_dirs):
+            shift_name = shift_dir.name
+            logger.debug(f"Processing epoch shift: {shift_name}")
+
+            # Find prediction and index files for val split only
+            # (test split is for analysis only, val split used for coin model)
+            pred_file = shift_dir / "val.csv.out"
+            index_file = shift_dir / "val_index.parquet"
+
+            if not pred_file.exists():
+                raise FileNotFoundError(f"Missing prediction file: {pred_file}")
+
+            if not index_file.exists():
+                raise FileNotFoundError(f"Missing index file: {index_file}")
+
+            # Load predictions (single column of scores)
+            predictions = pd.read_csv(pred_file, header=None, names=['score'])
+
+            # Load corresponding index
+            index_df = pd.read_parquet(index_file)
+
+            # Validate alignment
+            if len(predictions) != len(index_df):
+                raise ValueError(
+                    f"Length mismatch in {shift_name}/val: "
+                    f"{len(predictions)} predictions vs {len(index_df)} index rows"
+                )
+
+            # Combine predictions with index
+            combined_df = index_df.copy()
+            combined_df['score'] = predictions['score'].values
+
+            consolidated_data.append(combined_df)
+            splits_processed.add(f"{shift_name}/val")
+
+            logger.debug(f"  Processed {shift_name}: {len(combined_df)} rows")
+
+        if not consolidated_data:
+            raise FileNotFoundError(f"No valid prediction/index pairs found in {predictions_path}")
+
+        # Concatenate all data
+        all_scores_df = pd.concat(consolidated_data, ignore_index=True)
+
+        logger.info(f"Consolidated {len(splits_processed)} split files with {len(all_scores_df)} total rows")
+
+        # Validate no duplicate wallet-epoch combinations
+        if 'wallet_address' not in all_scores_df.columns or 'epoch_start_date' not in all_scores_df.columns:
+            raise ValueError(
+                f"Expected 'wallet_address' and 'epoch_start_date' columns in index. "
+                f"Found: {all_scores_df.columns.tolist()}"
+            )
+
+        # Check for duplicates across the key identifier columns
+        key_cols = ['wallet_address', 'epoch_start_date']
+        duplicate_mask = all_scores_df.duplicated(subset=key_cols, keep=False)
+
+        if duplicate_mask.any():
+            duplicates = all_scores_df[duplicate_mask][key_cols]
+            logger.error(f"Found {duplicate_mask.sum()} duplicate wallet-epoch combinations:")
+            for _, row in duplicates.head(10).iterrows():  # Show first 10 duplicates
+                logger.error(f"  {row['wallet_address']} @ {row['epoch_start_date']}")
+            raise ValueError(
+                f"Duplicate wallet-epoch combinations found. Each wallet-epoch pair should "
+                f"appear only once across all shifts. Found {duplicate_mask.sum()} duplicates."
+            )
+
+        # Prepare final DataFrame for coin model
+        final_df = all_scores_df[['wallet_address', 'epoch_start_date', 'score']].copy()
+
+        # Set MultiIndex as expected by coin model
+        final_df = final_df.set_index(['wallet_address', 'epoch_start_date'])
+
+        # Rename score column to match coin model expectations
+        final_df = final_df.rename(columns={'score': f'score|{score_name}'})
+
+        # Create output directory and save
+        output_dir = Path(self.wallets_config['training_data']['local_s3_root']) / \
+                    "s3_downloads" / "coin_model_scores" / \
+                    self.wallets_config['training_data']['local_directory']
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir / f"{score_name}.parquet"
+        final_df.to_parquet(output_path, index=True)
+
+        logger.info(f"Exported {len(final_df)} wallet scores to {output_path}")
+        logger.info(f"Score column: {final_df.columns[0]}")
+        logger.info(f"Index levels: {final_df.index.names}")
+
+        return str(output_path)
 
 
 
