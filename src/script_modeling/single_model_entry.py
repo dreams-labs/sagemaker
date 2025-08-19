@@ -89,6 +89,7 @@ def load_data_matrices(
             raise ValueError(
                 f"Length mismatch in train split: y={len(df_train_y)}, mask={len(offset_mask)}"
             )
+        df_train_x = df_train_x.reset_index(drop=True)
         df_train_y = df_train_y[offset_mask].reset_index(drop=True)
 
         df_val_x, offset_mask = ct.select_shifted_offsets(
@@ -98,6 +99,7 @@ def load_data_matrices(
             raise ValueError(
                 f"Length mismatch in eval split: y={len(df_val_y)}, mask={len(offset_mask)}"
             )
+        df_val_x = df_val_x.reset_index(drop=True)
         df_val_y = df_val_y[offset_mask].reset_index(drop=True)
 
         print(f"After epoch shift filtering - Train: {len(df_train_x)} rows, Val: {len(df_val_x)} rows")
