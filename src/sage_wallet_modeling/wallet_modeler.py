@@ -372,9 +372,10 @@ class WalletModeler:
         Apply feature selection locally, upload filtered data, then use cloud batch transform.
 
         This method bypasses SageMaker's 63-character input filter limit by applying
-        feature selection locally before uploading to S3 for batch transform.
+         feature selection locally before uploading to S3 for batch transform.
 
-        Flow: Local CSV → Local row filtering → Local column filtering → S3 upload → Batch transform → Download preds
+        Flow: Local CSV → Local row filtering → Local column filtering → S3 upload →
+         Batch transform → Download preds
 
         Params:
         - dataset_type (str): Type of dataset to score ('val' or 'test')
@@ -383,7 +384,8 @@ class WalletModeler:
         - override_existing (bool): Whether to overwrite existing local predictions
 
         Returns:
-        - dict: Contains transform job name and output S3 URI (same format as predict_with_batch_transform)
+        - dict: Contains transform job name and output S3 URI (same format as
+            predict_with_batch_transform)
         """
         # Validate we have a trained model
         if not self.model_uri:
@@ -418,7 +420,7 @@ class WalletModeler:
         df_filtered = self._apply_feature_selection_locally(df_rows_filtered, model_config)
 
         # Step 5: Remove column names for SageMaker compatibility
-        df_sagemaker = df_filtered.copy()
+        df_sagemaker = df_filtered.copy().reset_index(drop=True)
         df_sagemaker.columns = range(len(df_sagemaker.columns))
 
         # Step 6: Upload filtered data to temporary S3 location
@@ -440,7 +442,11 @@ class WalletModeler:
 
         # Step 9: Download predictions if requested
         if download_preds:
-            self._download_batch_transform_preds(result['predictions_uri'], dataset_type)
+            self._download_batch_transform_preds(
+                result['predictions_uri'],
+                dataset_type,
+                df_filtered
+            )
 
         logger.info(f"Local transform prediction completed for {dataset_type}")
 
@@ -725,6 +731,13 @@ class WalletModeler:
         # Assign proper column names to DataFrame
         df.columns = feature_columns
 
+        # Load and set the corresponding index
+        index_file = data_path / f"{split_name}_index.parquet"
+        if index_file.exists():
+            index_df = pd.read_parquet(index_file)
+            df.index = pd.MultiIndex.from_frame(index_df)
+
+
         logger.info(f"Loaded {split_name} data: {df.shape[0]:,} rows × {df.shape[1]} columns with feature names")
 
         # Validate data is not empty
@@ -911,28 +924,60 @@ class WalletModeler:
         return result
 
 
-    def _download_batch_transform_preds(self, predictions_uri: str, dataset_type: str) -> str:
+    def _download_batch_transform_preds(
+        self,
+        predictions_uri: str,
+        dataset_type: str,
+        df_with_index: pd.DataFrame = None
+    ) -> str:
         """
         Download batch transform predictions to standardized local path.
+        Optionally save the corresponding index for later joining with wallet identifiers.
 
         Params:
         - predictions_uri (str): S3 URI of predictions file
         - dataset_type (str): Type of dataset ('val' or 'test')
+        - df_with_index (pd.DataFrame, optional): DataFrame with wallet_address index
+            that corresponds row-by-row with the predictions. If provided, saves the
+            index as a separate parquet file for later consolidation.
 
         Returns:
         - str: Local file path where predictions were downloaded
         """
         # Construct standardized local path
         local_path = (f"{self.wallets_config['training_data']['local_s3_root']}/"
-                      f"s3_downloads/wallet_predictions/"
-                      f"{self.wallets_config['training_data']['download_directory']}/"
-                      f"{self.date_suffix}/"
-                      f"{dataset_type}.csv.out")
+                    f"s3_downloads/wallet_predictions/"
+                    f"{self.wallets_config['training_data']['download_directory']}/"
+                    f"{self.date_suffix}/"
+                    f"{dataset_type}.csv.out")
 
         # Use generic utility to download
         s3u.download_from_uri(predictions_uri, local_path)
 
+        # Save corresponding index if provided
+        if df_with_index is not None:
+            index_path = local_path.replace('.csv.out', '_index.parquet')
+
+            # Extract index as DataFrame
+            index_df = df_with_index.index.to_frame(index=False)
+
+            # Validate index length matches predictions
+            pred_df = pd.read_csv(local_path, header=None)
+            pred_rows = len(pred_df)
+
+            if len(index_df) != pred_rows:
+                raise ValueError(
+                    f"Index length mismatch: {len(index_df)} index rows vs "
+                    f"{pred_rows} prediction rows for {dataset_type}"
+                )
+
+            # Save index
+            index_df.to_parquet(index_path, index=False)
+
+            logger.info(f"Saved prediction index to {index_path} ({len(index_df)} rows, validated alignment)")
+
         return local_path
+
 
 
     # -------------------------------
