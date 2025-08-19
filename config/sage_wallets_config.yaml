@@ -3,9 +3,9 @@
 training_data: #SageMaker
     local_s3_root: ../  # where s3_uploads and s3_downloads exist
     training_data_directory: dda_962_all_windows  # where to load local csvs from
-    local_directory: dda_962_evals  # where to store local artifacts
-    upload_directory: dda-962-evals  # new S3 folder name in bucket training_data_processed
-    download_directory: dda_962_evals  # local directory where scores are stored
+    local_directory: dda_962_evals_v4  # where to store local artifacts
+    upload_directory: dda-962-evals-v4  # new S3 folder name in bucket training_data_processed
+    download_directory: dda_962_evals_v4  # local directory where scores are stored
 
     dataset: prod  # Set to prod or dev; determines whether to query core or dev dataset tables
 
@@ -24,15 +24,7 @@ training_data: #SageMaker
         180,
         240,
         300,
-        360,
-        # -30,
-        # 30,
-        # 90,
-        # 150,
-        # 210,
-        # 270,
-        # 330,
-        # 390,
+        360
     ]
     date_0: '200127' # the date that all offsets will be numbered relative to
     modeling_period_duration: 30  # the time difference between offsets
@@ -141,7 +133,7 @@ training_data: #SageMaker
     ]
     val_offsets: [  # val data is 1 month later than these modeling_period_start dates
         '240604',
-        # '240704',
+        '240704',
     ]
 
 preprocessing: #SageMaker
