@@ -35,9 +35,11 @@ def load_sage_wallets_config(config_path: str) -> dict:
             base_td_dir = raw_config['training_data']['training_data_directory']
             base_local_dir = raw_config['training_data']['local_directory']
             base_upload_dir = raw_config['training_data']['upload_directory']
+            base_download_dir = raw_config['training_data']['download_directory']
             raw_config['training_data']['training_data_directory'] = f"{base_td_dir}_dev"
             raw_config['training_data']['local_directory'] = f"{base_local_dir}_dev"
             raw_config['training_data']['upload_directory'] = f"{base_upload_dir}-dev"
+            raw_config['training_data']['download_directory'] = f"{base_download_dir}_dev"
 
         return validate_sage_wallets_config(raw_config)
 

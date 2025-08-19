@@ -129,7 +129,7 @@ def select_shifted_offsets(
     offset_mask = offset_dates.isin(target_offset_days)
 
     # Apply identical filtering to both X and Y
-    df_x_filtered = df_x_full[offset_mask].reset_index(drop=True)
+    df_x_filtered = df_x_full[offset_mask]
 
     return df_x_filtered, offset_mask
 

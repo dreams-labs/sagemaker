@@ -231,6 +231,7 @@ def _process_concatenated_split(
     X_epoch, offset_mask = select_shifted_offsets(
         X_full, wallets_config, epoch_shift, split
     )
+    X_epoch = X_epoch.reset_index(drop=True)
     y_epoch = y_df[offset_mask].reset_index(drop=True)
 
     # Build epoch mask directly from configured target_offset_days after shift
@@ -272,7 +273,10 @@ def _process_concatenated_split(
         raise SkipEpochEvaluation("No rows remaining after custom feature filters.")
 
     # 3) Align y and preds with the filter mask
-    y_filtered = y_epoch[row_mask].reset_index(drop=True)
+    try:
+        y_filtered = y_epoch[row_mask].reset_index(drop=True)
+    except:
+        print('sadge')
     y_pred_filtered = y_pred_epoch[row_mask].reset_index(drop=True)
 
     # y was already processed by load_concatenated_y(); just rename for clarity
