@@ -273,10 +273,7 @@ def _process_concatenated_split(
         raise SkipEpochEvaluation("No rows remaining after custom feature filters.")
 
     # 3) Align y and preds with the filter mask
-    try:
-        y_filtered = y_epoch[row_mask].reset_index(drop=True)
-    except:
-        print('sadge')
+    y_filtered = y_epoch[row_mask].reset_index(drop=True)
     y_pred_filtered = y_pred_epoch[row_mask].reset_index(drop=True)
 
     # y was already processed by load_concatenated_y(); just rename for clarity

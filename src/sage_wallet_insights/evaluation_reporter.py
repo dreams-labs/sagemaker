@@ -223,7 +223,8 @@ def analyze_epoch_consistency(summary_df: pd.DataFrame) -> pd.DataFrame:
 
 def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = True):
     """
-    Plot ROC and PR curves for all epoch shifts on validation data.
+    Plot ROC and PR curves for all epoch shifts on validation data,
+    plus aggregated return curves by prediction score.
 
     Params:
     - evaluators_dict (dict): {epoch_shift: evaluator} from build_all_epoch_shift_evaluators()
@@ -255,8 +256,8 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
         logger.warning("No evaluators with validation probability predictions found")
         return None
 
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    # Create figure with three subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
 
     # Generate colors for each epoch shift
     n_epochs = len(valid_evaluators)
@@ -265,9 +266,12 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
     # Sort evaluators by epoch_shift for consistent ordering
     sorted_evaluators = dict(sorted(valid_evaluators.items()))
 
-    # Storage for legend entries
+    # Storage for legend entries and overall averages
     roc_legend_entries = []
     pr_legend_entries = []
+    all_roc_curves = []
+    all_pr_data = []  # Store (y_val, y_val_proba) for threshold-based averaging
+    all_return_curves = []
 
     for (epoch_shift, evaluator), color in zip(sorted_evaluators.items(), colors):
         try:
@@ -275,9 +279,15 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
             y_val = evaluator.y_validation
             y_val_proba = evaluator.y_validation_pred_proba
 
+            # Store data for threshold-based PR averaging
+            all_pr_data.append((y_val, y_val_proba))
+
             # Calculate ROC curve
             fpr, tpr, _ = roc_curve(y_val, y_val_proba)
             roc_auc = auc(fpr, tpr)
+
+            # Store ROC curve for averaging
+            all_roc_curves.append((fpr, tpr))
 
             # Plot ROC curve
             ax1.plot(fpr, tpr, color=color, linewidth=2, alpha=0.8,
@@ -296,12 +306,71 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
             ax2.plot(recall[1:], precision_normalized[1:], color=color, linewidth=2, alpha=0.8,
                     label=f'Epoch {epoch_shift} (Δ-AUC: {pr_auc_normalized:.3f})')
 
+            # Extract and plot validation return curve
+            bucket_df = evaluator.compute_score_buckets(n_buckets=20)
+            if not bucket_df.empty:
+                # Store return curve for averaging
+                all_return_curves.append((bucket_df["score_mid"].values, bucket_df["wins_return"].values))
+
+                ax3.plot(bucket_df["score_mid"], bucket_df["wins_return"],
+                        color=color, linewidth=2, alpha=0.8,
+                        label=f'Epoch {epoch_shift}')
+
             roc_legend_entries.append((epoch_shift, roc_auc))
             pr_legend_entries.append((epoch_shift, pr_auc_normalized))
 
         except Exception as e:
             logger.warning(f"Could not plot curves for epoch_shift {epoch_shift}: {e}")
             continue
+
+    # Calculate and plot overall averages
+    if all_roc_curves:
+        # Average ROC curve using interpolation
+        common_fpr = np.linspace(0, 1, 100)
+        avg_tpr = np.zeros_like(common_fpr)
+
+        for fpr, tpr in all_roc_curves:
+            avg_tpr += np.interp(common_fpr, fpr, tpr)
+        avg_tpr /= len(all_roc_curves)
+
+        avg_roc_auc = auc(common_fpr, avg_tpr)
+        ax1.plot(common_fpr, avg_tpr, color='white', linewidth=3, linestyle=':', alpha=0.9,
+                label=f'Overall Average (AUC: {avg_roc_auc:.3f})')
+
+    # For PR curves, use threshold-based averaging
+    if all_pr_data:
+        # Combine all validation data
+        all_y_val = np.concatenate([y_val for y_val, _ in all_pr_data])
+        all_y_proba = np.concatenate([y_proba for _, y_proba in all_pr_data])
+
+        # Calculate overall baseline
+        overall_baseline = all_y_val.mean()
+
+        # Calculate PR curve on combined data
+        combined_precision, combined_recall, _ = precision_recall_curve(all_y_val, all_y_proba)
+        combined_precision_norm = combined_precision - overall_baseline
+        combined_pr_auc = auc(combined_recall, combined_precision_norm)
+
+        # Plot combined average curve
+        ax2.plot(combined_recall[1:], combined_precision_norm[1:], color='white', linewidth=3, linestyle=':', alpha=0.9,
+                label=f'Overall Average (Δ-AUC: {combined_pr_auc:.3f})')
+
+    if all_return_curves:
+        # Average return curves using common score grid
+        all_scores = np.concatenate([scores for scores, _ in all_return_curves])
+        common_scores = np.linspace(all_scores.min(), all_scores.max(), 50)
+        avg_returns = np.zeros_like(common_scores)
+        valid_curves = 0
+
+        for scores, returns in all_return_curves:
+            if len(scores) > 1 and len(returns) > 1:
+                avg_returns += np.interp(common_scores, scores, returns)
+                valid_curves += 1
+
+        if valid_curves > 0:
+            avg_returns /= valid_curves
+            ax3.plot(common_scores, avg_returns, color='white', linewidth=3, linestyle=':', alpha=0.9,
+                    label='Overall Average')
 
     # ROC plot formatting
     ax1.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.6, label='Random')
@@ -325,41 +394,22 @@ def plot_multi_epoch_validation_curves(evaluators_dict: dict, display: bool = Tr
     ax2.grid(True, linestyle=":", alpha=0.3)
     ax2.legend(loc="upper right", fontsize=10)
 
-    plt.tight_layout()
+    # Return curves plot formatting
+    # Add overall mean return reference line if we have data
+    if valid_evaluators:
+        # Get overall mean from first evaluator as reference
+        first_eval = next(iter(valid_evaluators.values()))
+        if hasattr(first_eval, 'validation_target_vars_df') and first_eval.validation_target_vars_df is not None:
+            target_var = first_eval.modeling_config["target_variable"]
+            overall_mean = first_eval.validation_target_vars_df[target_var].mean()
+            ax3.axhline(overall_mean, linestyle='--', linewidth=1, alpha=0.6,
+                       color='gray', label='Overall Mean Return')
 
-    # Print summary statistics
-    if roc_legend_entries:
-        roc_aucs = [auc for _, auc in roc_legend_entries]
-        pr_aucs = [auc for _, auc in pr_legend_entries]
-
-        print(f"\nMulti-Epoch Validation Curve Summary ({n_epochs} epochs)")
-        print("=" * 50)
-        print(f"ROC-AUC  | Mean: {np.mean(roc_aucs):.3f} | Std: {np.std(roc_aucs):.3f} | Range: {np.min(roc_aucs):.3f}-{np.max(roc_aucs):.3f}")
-        print(f"PR-AUC   | Mean: {np.mean(pr_aucs):.3f} | Std: {np.std(pr_aucs):.3f} | Range: {np.min(pr_aucs):.3f}-{np.max(pr_aucs):.3f}")
-
-        # Identify best and worst performing epochs
-        best_roc_idx = np.argmax(roc_aucs)
-        worst_roc_idx = np.argmin(roc_aucs)
-        best_pr_idx = np.argmax(pr_aucs)
-        worst_pr_idx = np.argmin(pr_aucs)
-
-        print(f"\nBest ROC-AUC:  Epoch {roc_legend_entries[best_roc_idx][0]} ({roc_aucs[best_roc_idx]:.3f})")
-        print(f"Worst ROC-AUC: Epoch {roc_legend_entries[worst_roc_idx][0]} ({roc_aucs[worst_roc_idx]:.3f})")
-        print(f"Best PR-AUC:   Epoch {pr_legend_entries[best_pr_idx][0]} ({pr_aucs[best_pr_idx]:.3f})")
-        print(f"Worst PR-AUC:  Epoch {pr_legend_entries[worst_pr_idx][0]} ({pr_aucs[worst_pr_idx]:.3f})")
-
-        # Calculate consistency scores
-        roc_cv = np.std(roc_aucs) / np.mean(roc_aucs) if np.mean(roc_aucs) > 0 else np.inf
-        pr_cv = np.std(pr_aucs) / np.mean(pr_aucs) if np.mean(pr_aucs) > 0 else np.inf
-
-        print(f"\nConsistency (lower CV = more consistent):")
-        print(f"ROC-AUC CV: {roc_cv:.3f}")
-        print(f"PR-AUC CV:  {pr_cv:.3f}")
-
-    if display:
-        plt.show()
-        return None
-    return fig
+    ax3.set_xlabel('Prediction Score')
+    ax3.set_ylabel('Winsorized Return')
+    ax3.set_title('Validation Return Curves - All Epoch Shifts')
+    ax3.grid(True, linestyle=":", alpha=0.3)
+    ax3.legend(loc="upper left", fontsize=10)
 
 
 def plot_validation_returns_distribution(evaluators_dict: dict, display: bool = True):
